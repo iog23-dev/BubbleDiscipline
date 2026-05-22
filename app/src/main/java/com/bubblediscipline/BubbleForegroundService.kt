@@ -38,7 +38,7 @@ class BubbleForegroundService : Service() {
         
         // 1. Iniciar la notificación persistente obligatoria
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("BubbleDiscipline Activo")
+            .setContentTitle("BubbleDiscipline Activo.")
             .setContentText("Custodiando tu pantalla...")
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setOngoing(true)
