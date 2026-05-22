@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
@@ -51,6 +52,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bubblediscipline.ui.theme.BubbleDisciplineTheme
 import java.util.Calendar
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -111,6 +113,9 @@ fun MainScreen(modifier: Modifier = Modifier, viewModel: MissionViewModel = view
     var sat by remember { mutableStateOf(false) }
     var sun by remember { mutableStateOf(false) }
 
+    // ID de la misión que se está editando (null si es nueva)
+    var editingMissionId by remember { mutableStateOf<Int?>(null) }
+
     // Escuchar las misiones guardadas en tiempo real
     val missionsList by viewModel.allMissions.collectAsState(initial = emptyList())
 
@@ -120,7 +125,10 @@ fun MainScreen(modifier: Modifier = Modifier, viewModel: MissionViewModel = view
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("Crear Nueva Misión de Disciplina", style = MaterialTheme.typography.titleLarge)
+        Text(
+            text = if (editingMissionId == null) "Crear Nueva Misión" else "Editando Misión",
+            style = MaterialTheme.typography.titleLarge
+        )
         Spacer(modifier = Modifier.height(8.dp))
 
         OutlinedTextField(
@@ -167,35 +175,57 @@ fun MainScreen(modifier: Modifier = Modifier, viewModel: MissionViewModel = view
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Button(
-            onClick = {
-                val h = hourText.toIntOrNull()
-                val m = minuteText.toIntOrNull()
-
-                if (message.isNotBlank() && h != null && m != null && h in 0..23 && m in 0..59) {
-                    val newMission = Mission(
-                        message = message,
-                        hour = h,
-                        minute = m,
-                        monday = mon, tuesday = tue, wednesday = wed,
-                        thursday = thu, friday = fri, saturday = sat, sunday = sun
-                    )
-                    viewModel.insert(newMission)
-                    
-                    // Limpiar formulario
-                    message = ""
-                    hourText = ""
-                    minuteText = ""
-                    mon = false; tue = false; wed = false; thu = false; fri = false; sat = false; sun = false
-                    
-                    Toast.makeText(context, "¡Misión guardada!", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, "Datos incorrectos", Toast.LENGTH_SHORT).show()
+        Row(modifier = Modifier.fillMaxWidth()) {
+            if (editingMissionId != null) {
+                Button(
+                    onClick = {
+                        // Cancelar edición
+                        editingMissionId = null
+                        message = ""
+                        hourText = ""
+                        minuteText = ""
+                        mon = false; tue = false; wed = false; thu = false; fri = false; sat = false; sun = false
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                ) {
+                    Text("Cancelar")
                 }
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Guardar Misión")
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+
+            Button(
+                onClick = {
+                    val h = hourText.toIntOrNull()
+                    val m = minuteText.toIntOrNull()
+
+                    if (message.isNotBlank() && h != null && m != null && h in 0..23 && m in 0..59) {
+                        val updatedMission = Mission(
+                            id = editingMissionId ?: 0,
+                            message = message,
+                            hour = h,
+                            minute = m,
+                            monday = mon, tuesday = tue, wednesday = wed,
+                            thursday = thu, friday = fri, saturday = sat, sunday = sun
+                        )
+                        viewModel.saveMission(updatedMission)
+                        
+                        // Limpiar formulario y resetear ID
+                        editingMissionId = null
+                        message = ""
+                        hourText = ""
+                        minuteText = ""
+                        mon = false; tue = false; wed = false; thu = false; fri = false; sat = false; sun = false
+                        
+                        Toast.makeText(context, "¡Misión guardada!", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Datos incorrectos", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier.weight(if (editingMissionId == null) 1f else 2f)
+            ) {
+                Text(if (editingMissionId == null) "Guardar Misión" else "Actualizar Misión")
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -230,20 +260,44 @@ fun MainScreen(modifier: Modifier = Modifier, viewModel: MissionViewModel = view
                 Card(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(mission.message, style = MaterialTheme.typography.bodyLarge)
-                            Text(
-                                String.format("Hora: %02d:%02d", mission.hour, mission.minute),
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                        Button(onClick = { viewModel.delete(mission) }) {
-                            Text("Borrar")
+                    Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(mission.message, style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    String.format(Locale.getDefault(), "Hora: %02d:%02d", mission.hour, mission.minute),
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            Row {
+                                Button(
+                                    onClick = {
+                                        // Cargar datos en el formulario para editar
+                                        editingMissionId = mission.id
+                                        message = mission.message
+                                        hourText = mission.hour.toString()
+                                        minuteText = mission.minute.toString()
+                                        mon = mission.monday
+                                        tue = mission.tuesday
+                                        wed = mission.wednesday
+                                        thu = mission.thursday
+                                        fri = mission.friday
+                                        sat = mission.saturday
+                                        sun = mission.sunday
+                                    },
+                                    modifier = Modifier.padding(end = 4.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
+                                ) {
+                                    Text("Editar")
+                                }
+                                Button(onClick = { viewModel.delete(mission) }) {
+                                    Text("Borrar")
+                                }
+                            }
                         }
                     }
                 }

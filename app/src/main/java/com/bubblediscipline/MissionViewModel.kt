@@ -9,16 +9,19 @@ import kotlinx.coroutines.launch
 class MissionViewModel(application: Application) : AndroidViewModel(application) {
     
     private val missionDao = AppDatabase.getDatabase(application).missionDao()
+    private val alarmScheduler = AlarmScheduler(application)
     
-    // Lista de misiones que se actualizará sola en la UI gracias a Flow
     val allMissions: Flow<List<Mission>> = missionDao.getAllMissions()
 
-    // Ejecutamos la inserción dentro del viewModelScope para no bloquear la app
-    fun insert(mission: Mission) = viewModelScope.launch {
-        missionDao.insertMission(mission)
+    fun saveMission(mission: Mission) = viewModelScope.launch {
+        val id = missionDao.insertMission(mission)
+        // Creamos una copia con el ID real (por si era 0 en una inserción nueva)
+        val savedMission = mission.copy(id = id.toInt())
+        alarmScheduler.schedule(savedMission)
     }
-    
+
     fun delete(mission: Mission) = viewModelScope.launch {
         missionDao.deleteMission(mission)
+        alarmScheduler.cancel(mission)
     }
 }

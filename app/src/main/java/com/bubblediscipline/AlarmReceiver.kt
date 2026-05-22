@@ -9,12 +9,18 @@ import android.widget.Toast
 
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        Log.d("BubbleDiscipline", "¡Alarma recibida! Despertando el servicio de disciplina...")
+        val missionId = intent.getIntExtra("MISSION_ID", -1)
+        val missionMessage = intent.getStringExtra("MISSION_MESSAGE") ?: "¡Hora de la disciplina!"
         
-        Toast.makeText(context, "⏰ ¡Hora de la disciplina!", Toast.LENGTH_LONG).show()
+        Log.d("BubbleDiscipline", "¡Alarma recibida! ID: $missionId, Mensaje: $missionMessage")
+        
+        Toast.makeText(context, "⏰ $missionMessage", Toast.LENGTH_LONG).show()
 
-        // Arrancamos el Foreground Service
-        val serviceIntent = Intent(context, BubbleForegroundService::class.java)
+        val serviceIntent = Intent(context, BubbleForegroundService::class.java).apply {
+            putExtra("BUBBLE_TEXT", missionMessage)
+            putExtra("MISSION_ID", missionId)
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(serviceIntent)
         } else {

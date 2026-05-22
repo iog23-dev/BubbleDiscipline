@@ -20,6 +20,22 @@ import android.view.WindowManager
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+
+data class BubbleInstance(
+    val missionId: Int,
+    val view: TextView,
+    val layoutParams: WindowManager.LayoutParams,
+    var posX: Float,
+    var posY: Float,
+    var speedX: Float,
+    var speedY: Float
+)
 
 class BubbleForegroundService : Service() {
 
@@ -27,32 +43,44 @@ class BubbleForegroundService : Service() {
     private val NOTIFICATION_ID = 101
 
     private lateinit var windowManager: WindowManager
-    private var bubbleView: View? = null
-    private lateinit var layoutParams: WindowManager.LayoutParams
+    private val activeBubbles = mutableListOf<BubbleInstance>()
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    // Motor de animación
     private val animationHandler = Handler(Looper.getMainLooper())
-    private var animationRunnable: Runnable? = null
-
-    // Variables de física de la burbuja
-    private var posX = 0f
-    private var posY = 0f
-    private var speedX = 12f
-    private var speedY = 15f
-    private var bubbleSize = 0
+    private var isAnimationRunning = false
 
     override fun onCreate() {
         super.onCreate()
-        Log.d("BubbleService", "Servicio creado")
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         createNotificationChannel()
+        observeDatabase()
+    }
+
+    private fun observeDatabase() {
+        val missionDao = AppDatabase.getDatabase(this).missionDao()
+        serviceScope.launch {
+            missionDao.getAllMissions().collectLatest { missions ->
+                // Cuando la DB cambie, actualizamos el texto de las burbujas activas
+                activeBubbles.forEach { bubble ->
+                    val updatedMission = missions.find { it.id == bubble.missionId }
+                    if (updatedMission != null) {
+                        bubble.view.text = "🫧\n${updatedMission.message}"
+                    } else {
+                        // Si la misión ya no existe, opcionalmente podríamos borrar la burbuja
+                        // Pero por ahora solo la dejamos con el texto que tenía
+                    }
+                }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d("BubbleService", "onStartCommand ejecutado")
+        val bubbleText = intent?.getStringExtra("BUBBLE_TEXT") ?: "¡Cázame!"
+        val missionId = intent?.getIntExtra("MISSION_ID", -1) ?: -1
         
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("BubbleDiscipline Activo")
-            .setContentText("¡La burbuja está patrullando!")
+            .setContentText("Tienes misiones pendientes")
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -60,35 +88,34 @@ class BubbleForegroundService : Service() {
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(
-                    NOTIFICATION_ID, 
-                    notification, 
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                )
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
-        } catch (e: Exception) {
-            Log.e("BubbleService", "Error al iniciar startForeground", e)
-        }
+        } catch (e: Exception) { Log.e("BubbleService", "Error FGS", e) }
 
-        showOverlayBubble()
-        startBubbleAnimation()
+        createNewBubble(missionId, bubbleText)
+
+        if (!isAnimationRunning) {
+            startGlobalAnimationLoop()
+        }
 
         return START_STICKY
     }
 
-    private fun showOverlayBubble() {
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        bubbleSize = (120 * resources.displayMetrics.density).toInt()
+    private fun createNewBubble(missionId: Int, text: String) {
+        // Evitar duplicar burbujas para la misma misión si ya está en pantalla
+        if (activeBubbles.any { it.missionId == missionId && missionId != -1 }) return
 
+        val metrics = resources.displayMetrics
+        val bubbleSize = (120 * metrics.density).toInt()
+        
         val textView = TextView(this).apply {
-            text = "🫧\n¡Cázame!"
+            this.text = "🫧\n$text"
             id = View.generateViewId()
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            textSize = 16f
-            
+            textSize = 14f
             val circle = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(Color.parseColor("#FF4081"))
@@ -97,10 +124,8 @@ class BubbleForegroundService : Service() {
             background = circle
         }
 
-        // Es fundamental usar Gravity.TOP or Gravity.START para posicionamiento absoluto
-        layoutParams = WindowManager.LayoutParams(
-            bubbleSize,
-            bubbleSize,
+        val lp = WindowManager.LayoutParams(
+            bubbleSize, bubbleSize,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or 
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
@@ -108,101 +133,93 @@ class BubbleForegroundService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 100
-            y = 100
+            x = (Math.random() * (metrics.widthPixels - bubbleSize)).toInt()
+            y = (Math.random() * (metrics.heightPixels - bubbleSize)).toInt()
         }
 
-        posX = layoutParams.x.toFloat()
-        posY = layoutParams.y.toFloat()
+        val newBubble = BubbleInstance(
+            missionId = missionId,
+            view = textView,
+            layoutParams = lp,
+            posX = lp.x.toFloat(),
+            posY = lp.y.toFloat(),
+            speedX = (if (Math.random() > 0.5) 1 else -1) * (8..15).random().toFloat(),
+            speedY = (if (Math.random() > 0.5) 1 else -1) * (8..15).random().toFloat()
+        )
 
-        bubbleView = textView
-        bubbleView?.setOnClickListener {
-            Toast.makeText(this, "💥 ¡Conseguido!", Toast.LENGTH_SHORT).show()
-            stopSelf()
+        textView.setOnClickListener {
+            removeBubble(newBubble)
+            Toast.makeText(this, "💥 ¡Disciplina cumplida!", Toast.LENGTH_SHORT).show()
+            if (activeBubbles.isEmpty()) stopSelf()
         }
 
         try {
-            windowManager.addView(bubbleView, layoutParams)
-        } catch (e: Exception) {
-            Log.e("BubbleService", "Error al añadir vista", e)
-            stopSelf()
-        }
+            windowManager.addView(textView, lp)
+            activeBubbles.add(newBubble)
+        } catch (e: Exception) { Log.e("BubbleService", "Error addView", e) }
     }
 
-    private fun startBubbleAnimation() {
+    private fun startGlobalAnimationLoop() {
+        if (isAnimationRunning) return
+        isAnimationRunning = true
+        
         val metrics = resources.displayMetrics
         val screenWidth = metrics.widthPixels
         val screenHeight = metrics.heightPixels
+        val bubbleSize = (120 * metrics.density).toInt()
 
-        animationRunnable = object : Runnable {
+        val runnable = object : Runnable {
             override fun run() {
-                if (bubbleView == null) return
-
-                posX += speedX
-                posY += speedY
-
-                // Rebote X
-                if (posX <= 0) {
-                    speedX = Math.abs(speedX)
-                    posX = 0f
-                } else if (posX >= (screenWidth - bubbleSize)) {
-                    speedX = -Math.abs(speedX)
-                    posX = (screenWidth - bubbleSize).toFloat()
+                if (activeBubbles.isEmpty()) {
+                    isAnimationRunning = false
+                    return
                 }
 
-                // Rebote Y
-                if (posY <= 0) {
-                    speedY = Math.abs(speedY)
-                    posY = 0f
-                } else if (posY >= (screenHeight - bubbleSize)) {
-                    speedY = -Math.abs(speedY)
-                    posY = (screenHeight - bubbleSize).toFloat()
+                val iterator = activeBubbles.iterator()
+                while (iterator.hasNext()) {
+                    val bubble = iterator.next()
+                    bubble.posX += bubble.speedX
+                    bubble.posY += bubble.speedY
+
+                    if (bubble.posX <= 0) { bubble.speedX = Math.abs(bubble.speedX); bubble.posX = 0f }
+                    else if (bubble.posX >= (screenWidth - bubbleSize)) { bubble.speedX = -Math.abs(bubble.speedX); bubble.posX = (screenWidth - bubbleSize).toFloat() }
+
+                    if (bubble.posY <= 0) { bubble.speedY = Math.abs(bubble.speedY); bubble.posY = 0f }
+                    else if (bubble.posY >= (screenHeight - bubbleSize)) { bubble.speedY = -Math.abs(bubble.speedY); bubble.posY = (screenHeight - bubbleSize).toFloat() }
+
+                    bubble.layoutParams.x = bubble.posX.toInt()
+                    bubble.layoutParams.y = bubble.posY.toInt()
+
+                    try {
+                        windowManager.updateViewLayout(bubble.view, bubble.layoutParams)
+                    } catch (e: Exception) { iterator.remove() }
                 }
 
-                layoutParams.x = posX.toInt()
-                layoutParams.y = posY.toInt()
-                
-                try {
-                    windowManager.updateViewLayout(bubbleView, layoutParams)
-                    animationHandler.postDelayed(this, 16)
-                } catch (e: Exception) {
-                    // Si la vista ya no existe, detenemos la animación
-                    animationHandler.removeCallbacks(this)
-                }
+                animationHandler.postDelayed(this, 16)
             }
         }
+        animationHandler.post(runnable)
+    }
 
-        animationHandler.post(animationRunnable!!)
+    private fun removeBubble(bubble: BubbleInstance) {
+        try { windowManager.removeView(bubble.view) } catch (e: Exception) { }
+        activeBubbles.remove(bubble)
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        animationRunnable?.let { animationHandler.removeCallbacks(it) }
-        removeBubble()
-    }
-
-    private fun removeBubble() {
-        if (bubbleView != null) {
-            try {
-                windowManager.removeView(bubbleView)
-            } catch (e: Exception) {
-                Log.e("BubbleService", "Error al quitar la burbuja", e)
-            }
-            bubbleView = null
-        }
+        serviceScope.cancel()
+        animationHandler.removeCallbacksAndMessages(null)
+        activeBubbles.forEach { try { windowManager.removeView(it.view) } catch (e: Exception) {} }
+        activeBubbles.clear()
+        isAnimationRunning = false
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Servicio de Disciplina",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Canal para las alarmas e interrupciones de BubbleDiscipline"
-            }
+            val channel = NotificationChannel(CHANNEL_ID, "Servicio de Disciplina", NotificationManager.IMPORTANCE_HIGH)
             val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
         }
