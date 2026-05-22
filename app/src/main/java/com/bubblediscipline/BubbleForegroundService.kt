@@ -10,7 +10,9 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -26,6 +28,18 @@ class BubbleForegroundService : Service() {
 
     private lateinit var windowManager: WindowManager
     private var bubbleView: View? = null
+    private lateinit var layoutParams: WindowManager.LayoutParams
+
+    // Motor de animación
+    private val animationHandler = Handler(Looper.getMainLooper())
+    private var animationRunnable: Runnable? = null
+
+    // Variables de física de la burbuja
+    private var posX = 0f
+    private var posY = 0f
+    private var speedX = 12f
+    private var speedY = 15f
+    private var bubbleSize = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -36,10 +50,9 @@ class BubbleForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d("BubbleService", "onStartCommand ejecutado")
         
-        // 1. Iniciar la notificación persistente obligatoria
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("BubbleDiscipline Activo.")
-            .setContentText("Custodiando tu pantalla...")
+            .setContentTitle("BubbleDiscipline Activo")
+            .setContentText("¡La burbuja está patrullando!")
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -55,29 +68,27 @@ class BubbleForegroundService : Service() {
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
-            Log.d("BubbleService", "startForeground llamado con éxito")
         } catch (e: Exception) {
             Log.e("BubbleService", "Error al iniciar startForeground", e)
         }
 
-        // 2. Lanzar la burbuja superpuesta
         showOverlayBubble()
+        startBubbleAnimation()
 
         return START_STICKY
     }
 
     private fun showOverlayBubble() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        bubbleSize = (120 * resources.displayMetrics.density).toInt()
 
-        // Creamos una vista simple (Un texto dentro de un círculo)
         val textView = TextView(this).apply {
-            text = "🫧\n¡Haz la cama!"
+            text = "🫧\n¡Cázame!"
             id = View.generateViewId()
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             textSize = 16f
             
-            // Diseñamos el círculo programáticamente (Fondo rojo/rosa disciplinario)
             val circle = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(Color.parseColor("#FF4081"))
@@ -86,39 +97,88 @@ class BubbleForegroundService : Service() {
             background = circle
         }
 
-        // Definimos el tamaño de la burbuja (Ej: 120dp x 120dp aproximados en píxeles)
-        val sizeInPx = (120 * resources.displayMetrics.density).toInt()
-
-        // Configuración crucial del WindowManager
-        val layoutParams = WindowManager.LayoutParams(
-            sizeInPx,
-            sizeInPx,
-            // TYPE_APPLICATION_OVERLAY es obligatorio desde Android 8
+        // Es fundamental usar Gravity.TOP or Gravity.START para posicionamiento absoluto
+        layoutParams = WindowManager.LayoutParams(
+            bubbleSize,
+            bubbleSize,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            // FLAG_NOT_FOCUSABLE evita que la burbuja robe el teclado del sistema
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or 
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
-            // Posición inicial de la burbuja (Centro de la pantalla)
-            gravity = Gravity.CENTER
+            gravity = Gravity.TOP or Gravity.START
+            x = 100
+            y = 100
         }
+
+        posX = layoutParams.x.toFloat()
+        posY = layoutParams.y.toFloat()
 
         bubbleView = textView
-
-        // Acción al pulsar la burbuja: Por ahora se destruye ("explota")
         bubbleView?.setOnClickListener {
-            Toast.makeText(this, "💥 ¡Burbuja explotada!", Toast.LENGTH_SHORT).show()
-            removeBubble()
-            stopSelf() // Detiene el Foreground Service si ya no hay trabajo
+            Toast.makeText(this, "💥 ¡Conseguido!", Toast.LENGTH_SHORT).show()
+            stopSelf()
         }
 
-        // Añadimos la vista directamente al flujo visual del sistema operativo
         try {
             windowManager.addView(bubbleView, layoutParams)
         } catch (e: Exception) {
-            Log.e("BubbleService", "Error al añadir vista al WindowManager", e)
-            Toast.makeText(this, "Error al pintar overlay. ¿Falta el permiso?", Toast.LENGTH_LONG).show()
+            Log.e("BubbleService", "Error al añadir vista", e)
+            stopSelf()
         }
+    }
+
+    private fun startBubbleAnimation() {
+        val metrics = resources.displayMetrics
+        val screenWidth = metrics.widthPixels
+        val screenHeight = metrics.heightPixels
+
+        animationRunnable = object : Runnable {
+            override fun run() {
+                if (bubbleView == null) return
+
+                posX += speedX
+                posY += speedY
+
+                // Rebote X
+                if (posX <= 0) {
+                    speedX = Math.abs(speedX)
+                    posX = 0f
+                } else if (posX >= (screenWidth - bubbleSize)) {
+                    speedX = -Math.abs(speedX)
+                    posX = (screenWidth - bubbleSize).toFloat()
+                }
+
+                // Rebote Y
+                if (posY <= 0) {
+                    speedY = Math.abs(speedY)
+                    posY = 0f
+                } else if (posY >= (screenHeight - bubbleSize)) {
+                    speedY = -Math.abs(speedY)
+                    posY = (screenHeight - bubbleSize).toFloat()
+                }
+
+                layoutParams.x = posX.toInt()
+                layoutParams.y = posY.toInt()
+                
+                try {
+                    windowManager.updateViewLayout(bubbleView, layoutParams)
+                    animationHandler.postDelayed(this, 16)
+                } catch (e: Exception) {
+                    // Si la vista ya no existe, detenemos la animación
+                    animationHandler.removeCallbacks(this)
+                }
+            }
+        }
+
+        animationHandler.post(animationRunnable!!)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        animationRunnable?.let { animationHandler.removeCallbacks(it) }
+        removeBubble()
     }
 
     private fun removeBubble() {
@@ -130,11 +190,6 @@ class BubbleForegroundService : Service() {
             }
             bubbleView = null
         }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        removeBubble() // Limpieza obligatoria para evitar Memory Leaks
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
