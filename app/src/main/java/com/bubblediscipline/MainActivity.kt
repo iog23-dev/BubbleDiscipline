@@ -1,6 +1,9 @@
 package com.bubblediscipline
 
 import android.Manifest
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -14,8 +17,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
@@ -30,8 +36,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.bubblediscipline.ui.theme.BubbleDisciplineTheme
+import java.util.Calendar
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -81,9 +89,10 @@ fun MainScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    Box(
+    Column(
         modifier = modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
         Button(onClick = {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
@@ -115,7 +124,54 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 }
             }
         }) {
-            Text("Iniciar Servicio de Disciplina")
+            Text("Iniciar Burbuja Ya")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // NUEVO BOTÓN: Programar alarma en 10 segundos
+        Button(onClick = {
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            
+            // Creamos el intento que viajará hacia nuestro AlarmReceiver
+            val intent = Intent(context, AlarmReceiver::class.java)
+            val pendingIntent = PendingIntent.getBroadcast(
+                context,
+                0,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            // Calculamos el tiempo actual + 10 segundos
+            val triggerTime = Calendar.getInstance().apply {
+                add(Calendar.SECOND, 10)
+            }.timeInMillis
+
+            // Programamos de forma ultra exacta.
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerTime,
+                        pendingIntent
+                    )
+                } else {
+                    alarmManager.setExact(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerTime,
+                        pendingIntent
+                    )
+                }
+                Toast.makeText(context, "Alarma programada en 10 segundos", Toast.LENGTH_SHORT).show()
+            } catch (e: SecurityException) {
+                Log.e("MainActivity", "Error de seguridad al programar alarma exacta", e)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val intentOverlay = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                    context.startActivity(intentOverlay)
+                }
+            }
+        }) {
+            Text("Probar Alarma (10 seg)")
         }
     }
 }
