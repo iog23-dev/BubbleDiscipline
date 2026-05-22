@@ -26,6 +26,7 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 
 class BlockingView(context: Context, private val onEmergencyExit: () -> Unit) : FrameLayout(context) {
     private var volumeDownCount = 0
@@ -49,12 +50,9 @@ class BlockingView(context: Context, private val onEmergencyExit: () -> Unit) : 
         return super.dispatchKeyEvent(event)
     }
 
-    // Gestionar el foco
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
         if (!hasWindowFocus) {
-            // Si perdemos el foco (porque bajaron notificaciones), 
-            // intentamos recuperarlo para que el bloqueo sea efectivo.
             requestFocus()
         }
     }
@@ -81,13 +79,20 @@ class BubbleForegroundService : Service() {
 
     private val animationHandler = Handler(Looper.getMainLooper())
     private var isAnimationRunning = false
+    
+    private lateinit var settingsManager: SettingsManager
+    private var currentBubbleColor = SettingsManager.DEFAULT_COLOR
+    private var currentBubbleSpeed = SettingsManager.DEFAULT_SPEED
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        settingsManager = SettingsManager(this)
+        
         createNotificationChannel()
         setupBlockingUI()
         observeDatabase()
+        observeSettings()
     }
 
     private fun setupBlockingUI() {
@@ -112,7 +117,6 @@ class BubbleForegroundService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            // PERMITIR QUE LA VISTA INVADA EL NOTCH Y LOS BORDES REALES
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
@@ -135,7 +139,34 @@ class BubbleForegroundService : Service() {
                     val updatedMission = missions.find { it.id == bubble.missionId }
                     if (updatedMission != null) {
                         bubble.view.text = "🫧\n${updatedMission.message}"
+                        // Actualizar visibilidad si se desactiva
+                        if (!updatedMission.isEnabled) {
+                           removeBubbleInstance(bubble)
+                        }
                     }
+                }
+            }
+        }
+    }
+
+    private fun observeSettings() {
+        serviceScope.launch {
+            settingsManager.bubbleColorFlow.collectLatest { colorHex ->
+                currentBubbleColor = colorHex
+                // Actualizar color de burbujas existentes
+                val color = Color.parseColor(colorHex)
+                activeBubbles.forEach { bubble ->
+                    (bubble.view.background as? GradientDrawable)?.setColor(color)
+                }
+            }
+        }
+        serviceScope.launch {
+            settingsManager.bubbleSpeedFlow.collectLatest { speed ->
+                currentBubbleSpeed = speed
+                // Actualizar velocidad manteniendo dirección
+                activeBubbles.forEach { bubble ->
+                    bubble.speedX = if (bubble.speedX > 0) speed else -speed
+                    bubble.speedY = if (bubble.speedY > 0) speed else -speed
                 }
             }
         }
@@ -146,9 +177,14 @@ class BubbleForegroundService : Service() {
         val missionId = intent?.getIntExtra("MISSION_ID", -1) ?: -1
         
         startForegroundNotification()
-        createNewBubble(missionId, bubbleText)
-
-        if (!isAnimationRunning) startGlobalAnimationLoop()
+        
+        // Cargar ajustes actuales antes de crear la burbuja
+        serviceScope.launch {
+            currentBubbleColor = settingsManager.bubbleColorFlow.first()
+            currentBubbleSpeed = settingsManager.bubbleSpeedFlow.first()
+            createNewBubble(missionId, bubbleText)
+            if (!isAnimationRunning) startGlobalAnimationLoop()
+        }
 
         return START_STICKY
     }
@@ -193,7 +229,7 @@ class BubbleForegroundService : Service() {
             textSize = 14f
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#FF4081"))
+                setColor(Color.parseColor(currentBubbleColor))
                 setStroke(4, Color.WHITE)
             }
             isClickable = true
@@ -207,18 +243,22 @@ class BubbleForegroundService : Service() {
             view = textView,
             posX = (Math.random() * (realSize.x - bubbleSize)).toFloat(),
             posY = (Math.random() * (realSize.y - bubbleSize)).toFloat(),
-            speedX = (if (Math.random() > 0.5) 1 else -1) * (10..15).random().toFloat(),
-            speedY = (if (Math.random() > 0.5) 1 else -1) * (10..15).random().toFloat()
+            speedX = (if (Math.random() > 0.5) 1 else -1) * currentBubbleSpeed,
+            speedY = (if (Math.random() > 0.5) 1 else -1) * currentBubbleSpeed
         )
 
         textView.setOnClickListener {
-            blockingContainer.removeView(textView)
-            activeBubbles.remove(newBubble)
-            if (activeBubbles.isEmpty()) stopSelf()
+            removeBubbleInstance(newBubble)
         }
 
         blockingContainer.addView(textView)
         activeBubbles.add(newBubble)
+    }
+
+    private fun removeBubbleInstance(bubble: BubbleInstance) {
+        blockingContainer.removeView(bubble.view)
+        activeBubbles.remove(bubble)
+        if (activeBubbles.isEmpty()) stopSelf()
     }
 
     private fun startGlobalAnimationLoop() {
@@ -248,7 +288,6 @@ class BubbleForegroundService : Service() {
                     bubble.posX += bubble.speedX
                     bubble.posY += bubble.speedY
 
-                    // Rebote usando el TAMAÑO REAL de la pantalla (incluyendo barras)
                     if (bubble.posX <= 0 || bubble.posX >= (realSize.x - bubbleSize)) {
                         bubble.speedX *= -1f
                         bubble.posX = bubble.posX.coerceIn(0f, (realSize.x - bubbleSize).toFloat())

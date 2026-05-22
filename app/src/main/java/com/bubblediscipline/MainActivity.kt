@@ -16,25 +16,32 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -47,8 +54,31 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            BubbleDisciplineTheme {
-                MainNavigationWrapper()
+            val settingsViewModel: SettingsViewModel = viewModel()
+            val appTheme by settingsViewModel.appTheme.collectAsState()
+            
+            // Definir colores basados en el tema
+            val primaryColor = when (appTheme) {
+                "Azul" -> Color(0xFF2196F3)
+                "Verde" -> Color(0xFF4CAF50)
+                "Naranja" -> Color(0xFFFF9800)
+                "Morado" -> Color(0xFF9C27B0)
+                else -> Color(0xFFFF4081) // Rosa por defecto
+            }
+
+            MaterialTheme(
+                colorScheme = darkColorScheme(
+                    primary = primaryColor,
+                    secondary = primaryColor.copy(alpha = 0.7f),
+                    tertiary = Color(0xFF03DAC5)
+                )
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    MainNavigationWrapper(primaryColor = primaryColor)
+                }
             }
         }
     }
@@ -56,7 +86,11 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainNavigationWrapper(viewModel: MissionViewModel = viewModel()) {
+fun MainNavigationWrapper(
+    missionViewModel: MissionViewModel = viewModel(),
+    settingsViewModel: SettingsViewModel = viewModel(),
+    primaryColor: Color
+) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var currentScreen by remember { mutableStateOf("Misiones") }
@@ -83,20 +117,30 @@ fun MainNavigationWrapper(viewModel: MissionViewModel = viewModel()) {
                     },
                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                 )
+
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                    label = { Text("Ajustes") },
+                    selected = currentScreen == "Ajustes",
+                    onClick = {
+                        currentScreen = "Ajustes"
+                        scope.launch { drawerState.close() }
+                    },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
             }
         }
     ) {
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text("Panel de Disciplina") },
+                    title = { Text(if (currentScreen == "Misiones") "Panel de Disciplina" else "Ajustes de Burbuja") },
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
                             Icon(Icons.Default.Menu, contentDescription = "Abrir menú")
                         }
                     },
                     actions = {
-                        // Botones de prueba rápidos en la barra superior
                         val context = LocalContext.current
                         IconButton(onClick = {
                              val intent = Intent(context, BubbleForegroundService::class.java)
@@ -117,7 +161,8 @@ fun MainNavigationWrapper(viewModel: MissionViewModel = viewModel()) {
         ) { innerPadding ->
             Box(modifier = Modifier.padding(innerPadding)) {
                 when (currentScreen) {
-                    "Misiones" -> MissionsScreen(viewModel)
+                    "Misiones" -> MissionsScreen(missionViewModel, primaryColor)
+                    "Ajustes" -> SettingsScreen(settingsViewModel)
                 }
             }
         }
@@ -126,13 +171,24 @@ fun MainNavigationWrapper(viewModel: MissionViewModel = viewModel()) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MissionsScreen(viewModel: MissionViewModel) {
+fun MissionsScreen(viewModel: MissionViewModel, primaryColor: Color) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
     var showSheet by remember { mutableStateOf(false) }
-    val sheetState = rememberModalBottomSheetState()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var editingMission by remember { mutableStateOf<Mission?>(null) }
+
+    val focusedMissionId by viewModel.focusedMissionId.collectAsState()
+    val missionsList by viewModel.allMissions.collectAsState(initial = emptyList())
+    val focusedMission = missionsList.find { it.id == focusedMissionId }
+
+    var selectedTab by remember { mutableIntStateOf(0) }
+    val tabs = listOf("Activas", "Desactivadas")
+
+    val filteredMissions = missionsList.filter { 
+        if (selectedTab == 0) it.isEnabled else !it.isEnabled 
+    }
 
     // Gestión de permisos
     var hasNotificationPermission by remember {
@@ -156,73 +212,91 @@ fun MissionsScreen(viewModel: MissionViewModel) {
         }
     }
 
-    val missionsList by viewModel.allMissions.collectAsState(initial = emptyList())
-
-    Scaffold(
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = {
-                    editingMission = null
-                    showSheet = true
-                },
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Añadir misión")
-            }
-        }
-    ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize().padding(16.dp)) {
-            Text("Misiones Actuales", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(16.dp))
-
-            if (missionsList.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("No hay misiones. ¡Crea una!", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            floatingActionButton = {
+                FloatingActionButton(
+                    onClick = {
+                        editingMission = null
+                        showSheet = true
+                    },
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Añadir misión")
                 }
-            } else {
-                LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                    items(missionsList) { mission ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                            onClick = {
-                                editingMission = mission
-                                showSheet = true
-                            }
+            }
+        ) { padding ->
+            Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+                TabRow(selectedTabIndex = selectedTab) {
+                    tabs.forEachIndexed { index, title ->
+                        Tab(
+                            selected = selectedTab == index,
+                            onClick = { selectedTab = index },
+                            text = { Text(title) }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Column(modifier = Modifier.padding(horizontal = 16.dp).fillMaxSize()) {
+                    Text("Misiones de Mantenimiento", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (filteredMissions.isEmpty()) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(
+                                if (selectedTab == 0) "No hay misiones activas" else "No hay misiones desactivadas",
+                                style = MaterialTheme.typography.bodyLarge, 
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(2),
+                            contentPadding = PaddingValues(bottom = 80.dp),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.fillMaxSize()
                         ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(mission.message, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                    Text(
-                                        text = String.format(Locale.getDefault(), "⏰ %02d:%02d", mission.hour, mission.minute),
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Text(
-                                        text = buildDaysString(mission),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Row {
-                                    IconButton(onClick = {
-                                        editingMission = mission
-                                        showSheet = true
-                                    }) {
-                                        Icon(Icons.Default.Edit, contentDescription = "Editar", tint = MaterialTheme.colorScheme.tertiary)
-                                    }
-                                    IconButton(onClick = { viewModel.delete(mission) }) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Borrar", tint = MaterialTheme.colorScheme.error)
-                                    }
+                            items(filteredMissions) { mission ->
+                                BubbleItem(mission, primaryColor) {
+                                    viewModel.setFocusedMission(mission.id)
                                 }
                             }
                         }
                     }
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = focusedMission != null,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            focusedMission?.let { mission ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.8f))
+                        .clickable(enabled = true, onClick = { viewModel.setFocusedMission(null) }),
+                    contentAlignment = Alignment.Center
+                ) {
+                    FocusedBubbleView(
+                        mission = mission,
+                        primaryColor = primaryColor,
+                        onEdit = {
+                            editingMission = mission
+                            viewModel.setFocusedMission(null)
+                            showSheet = true
+                        },
+                        onDelete = {
+                            viewModel.delete(mission)
+                            viewModel.setFocusedMission(null)
+                        }
+                    )
                 }
             }
         }
@@ -237,6 +311,7 @@ fun MissionsScreen(viewModel: MissionViewModel) {
             ) {
                 MissionEditorContent(
                     initialMission = editingMission,
+                    primaryColor = primaryColor,
                     onSave = { mission ->
                         viewModel.saveMission(mission)
                         scope.launch { sheetState.hide() }.invokeOnCompletion {
@@ -256,16 +331,206 @@ fun MissionsScreen(viewModel: MissionViewModel) {
     }
 }
 
+@Composable
+fun SettingsScreen(viewModel: SettingsViewModel) {
+    val bubbleColor by viewModel.bubbleColor.collectAsState()
+    val bubbleSpeed by viewModel.bubbleSpeed.collectAsState()
+    val appTheme by viewModel.appTheme.collectAsState()
+
+    val colors = listOf("#FF4081", "#2196F3", "#4CAF50", "#FF9800", "#9C27B0")
+    val themes = listOf("Rosa", "Azul", "Verde", "Naranja", "Morado")
+
+    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+        Text("Personalización", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text("Tema de la Aplicación", style = MaterialTheme.typography.titleMedium)
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            themes.forEach { theme ->
+                FilterChip(
+                    selected = appTheme == theme,
+                    onClick = { viewModel.setAppTheme(theme) },
+                    label = { Text(theme) }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Text("Color de las Burbujas", style = MaterialTheme.typography.titleMedium)
+        Spacer(modifier = Modifier.height(16.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            colors.forEach { colorHex ->
+                val color = Color(android.graphics.Color.parseColor(colorHex))
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(color)
+                        .border(
+                            width = if (bubbleColor == colorHex) 4.dp else 0.dp,
+                            color = Color.White,
+                            shape = CircleShape
+                        )
+                        .clickable { viewModel.setBubbleColor(colorHex) }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Text("Velocidad de Movimiento: ${bubbleSpeed.toInt()}", style = MaterialTheme.typography.titleMedium)
+        Slider(
+            value = bubbleSpeed,
+            onValueChange = { viewModel.setBubbleSpeed(it) },
+            valueRange = 5f..30f,
+            steps = 5
+        )
+        Text("Controla qué tan rápido rebotan las burbujas por tu pantalla.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+fun BubbleItem(mission: Mission, primaryColor: Color, onClick: () -> Unit) {
+    val bubbleSize = 140.dp
+    
+    Box(
+        modifier = Modifier
+            .size(bubbleSize)
+            .clip(CircleShape)
+            .alpha(if (mission.isEnabled) 1f else 0.5f)
+            .background(
+                brush = Brush.radialGradient(
+                    colors = if (mission.isEnabled) {
+                        listOf(Color(0xFF424242), Color(0xFF212121))
+                    } else {
+                        listOf(Color(0xFF333333), Color(0xFF111111))
+                    }
+                )
+            )
+            .border(2.dp, if (mission.isEnabled) primaryColor else Color.Gray, CircleShape)
+            .clickable { onClick() }
+            .padding(12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = if (mission.isEnabled) "🫧" else "💤",
+                fontSize = 24.sp
+            )
+            Text(
+                text = mission.message,
+                style = MaterialTheme.typography.labelMedium,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                color = Color.White
+            )
+            Text(
+                text = String.format(Locale.getDefault(), "%02d:%02d", mission.hour, mission.minute),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (mission.isEnabled) primaryColor else Color.Gray,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
+fun FocusedBubbleView(
+    mission: Mission,
+    primaryColor: Color,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val size by animateDpAsState(targetValue = 300.dp, animationSpec = tween(500), label = "bubbleSize")
+    
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = Modifier.clickable(enabled = false) { }
+    ) {
+        Box(
+            modifier = Modifier
+                .size(size)
+                .clip(CircleShape)
+                .background(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFF424242), Color(0xFF121212))
+                    )
+                )
+                .border(4.dp, if (mission.isEnabled) primaryColor else Color.Gray, CircleShape)
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "${if (mission.isEnabled) "🫧" else "💤"} ${mission.message}",
+                    style = MaterialTheme.typography.headlineMedium,
+                    textAlign = TextAlign.Center,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = String.format(Locale.getDefault(), "⏰ %02d:%02d", mission.hour, mission.minute),
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = if (mission.isEnabled) primaryColor else Color.Gray,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = buildDaysString(mission),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0xFFBB86FC),
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(32.dp))
+        
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                FloatingActionButton(
+                    onClick = onEdit,
+                    containerColor = Color.DarkGray,
+                    contentColor = primaryColor
+                ) {
+                    Icon(Icons.Default.Edit, contentDescription = "Editar")
+                }
+                Text("Editar", color = Color.White, style = MaterialTheme.typography.labelLarge)
+            }
+            
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                FloatingActionButton(
+                    onClick = onDelete,
+                    containerColor = Color.DarkGray,
+                    contentColor = Color.Red
+                ) {
+                    Icon(Icons.Default.Delete, contentDescription = "Eliminar")
+                }
+                Text("Eliminar", color = Color.White, style = MaterialTheme.typography.labelLarge)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MissionEditorContent(
     initialMission: Mission?,
+    primaryColor: Color,
     onSave: (Mission) -> Unit,
     onCancel: () -> Unit
 ) {
     var message by remember { mutableStateOf(initialMission?.message ?: "") }
     var hour by remember { mutableIntStateOf(initialMission?.hour ?: 8) }
     var minute by remember { mutableIntStateOf(initialMission?.minute ?: 0) }
+    var isEnabled by remember { mutableStateOf(initialMission?.isEnabled ?: true) }
     
     var mon by remember { mutableStateOf(initialMission?.monday ?: false) }
     var tue by remember { mutableStateOf(initialMission?.tuesday ?: false) }
@@ -296,12 +561,26 @@ fun MissionEditorContent(
             shape = MaterialTheme.shapes.medium
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        // Selector de Hora Moderno (Click para abrir reloj)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Misión Activa", style = MaterialTheme.typography.bodyLarge)
+            Switch(
+                checked = isEnabled,
+                onCheckedChange = { isEnabled = it },
+                colors = SwitchDefaults.colors(checkedThumbColor = primaryColor)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         Card(
             modifier = Modifier.fillMaxWidth().clickable { showTimePicker = true },
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)),
+            colors = CardDefaults.cardColors(containerColor = primaryColor.copy(alpha = 0.1f)),
             shape = MaterialTheme.shapes.medium
         ) {
             Column(modifier = Modifier.padding(16.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -310,7 +589,7 @@ fun MissionEditorContent(
                     text = String.format(Locale.getDefault(), "%02d:%02d", hour, minute),
                     style = MaterialTheme.typography.displayMedium,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
+                    color = primaryColor
                 )
                 Text("Toca para cambiar", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -344,6 +623,7 @@ fun MissionEditorContent(
                             message = message,
                             hour = hour,
                             minute = minute,
+                            isEnabled = isEnabled,
                             monday = mon, tuesday = tue, wednesday = wed,
                             thursday = thu, friday = fri, saturday = sat, sunday = sun
                         )
@@ -351,13 +631,14 @@ fun MissionEditorContent(
                 }
             },
             modifier = Modifier.fillMaxWidth().height(56.dp),
-            shape = MaterialTheme.shapes.medium
+            shape = MaterialTheme.shapes.medium,
+            colors = ButtonDefaults.buttonColors(containerColor = primaryColor)
         ) {
             Text("Guardar Misión", style = MaterialTheme.typography.titleMedium)
         }
         
         TextButton(onClick = onCancel) {
-            Text("Cancelar")
+            Text("Cancelar", color = primaryColor)
         }
         Spacer(modifier = Modifier.height(16.dp))
     }
