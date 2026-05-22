@@ -10,49 +10,37 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bubblediscipline.ui.theme.BubbleDisciplineTheme
-import java.util.Calendar
-import java.util.Locale
+import kotlinx.coroutines.launch
+import java.util.*
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -60,26 +48,97 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             BubbleDisciplineTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    MainScreen(modifier = Modifier.padding(innerPadding))
+                MainNavigationWrapper()
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MainNavigationWrapper(viewModel: MissionViewModel = viewModel()) {
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    var currentScreen by remember { mutableStateOf("Misiones") }
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "BubbleDiscipline 🫧",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(16.dp)
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Default.Star, contentDescription = null) },
+                    label = { Text("Mis Misiones") },
+                    selected = currentScreen == "Misiones",
+                    onClick = {
+                        currentScreen = "Misiones"
+                        scope.launch { drawerState.close() }
+                    },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
+            }
+        }
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Panel de Disciplina") },
+                    navigationIcon = {
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                            Icon(Icons.Default.Menu, contentDescription = "Abrir menú")
+                        }
+                    },
+                    actions = {
+                        // Botones de prueba rápidos en la barra superior
+                        val context = LocalContext.current
+                        IconButton(onClick = {
+                             val intent = Intent(context, BubbleForegroundService::class.java)
+                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                 context.startForegroundService(intent)
+                             } else {
+                                 context.startService(intent)
+                             }
+                        }) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = "Test Burbuja", tint = MaterialTheme.colorScheme.primary)
+                        }
+                        IconButton(onClick = { testAlarm(context) }) {
+                            Icon(Icons.Default.Timer, contentDescription = "Test Alarma", tint = MaterialTheme.colorScheme.secondary)
+                        }
+                    }
+                )
+            }
+        ) { innerPadding ->
+            Box(modifier = Modifier.padding(innerPadding)) {
+                when (currentScreen) {
+                    "Misiones" -> MissionsScreen(viewModel)
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(modifier: Modifier = Modifier, viewModel: MissionViewModel = viewModel()) {
+fun MissionsScreen(viewModel: MissionViewModel) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     
-    // Estados de permisos
+    var showSheet by remember { mutableStateOf(false) }
+    val sheetState = rememberModalBottomSheetState()
+    var editingMission by remember { mutableStateOf<Mission?>(null) }
+
+    // Gestión de permisos
     var hasNotificationPermission by remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             mutableStateOf(
-                ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.POST_NOTIFICATIONS
-                ) == PackageManager.PERMISSION_GRANTED
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
             )
         } else {
             mutableStateOf(true)
@@ -88,9 +147,7 @@ fun MainScreen(modifier: Modifier = Modifier, viewModel: MissionViewModel = view
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
-        onResult = { isGranted ->
-            hasNotificationPermission = isGranted
-        }
+        onResult = { isGranted -> hasNotificationPermission = isGranted }
     )
 
     LaunchedEffect(Unit) {
@@ -99,70 +156,173 @@ fun MainScreen(modifier: Modifier = Modifier, viewModel: MissionViewModel = view
         }
     }
 
-    // Estado del formulario
-    var message by remember { mutableStateOf("") }
-    var hourText by remember { mutableStateOf("") }
-    var minuteText by remember { mutableStateOf("") }
-    
-    // Estados para los días de la semana
-    var mon by remember { mutableStateOf(false) }
-    var tue by remember { mutableStateOf(false) }
-    var wed by remember { mutableStateOf(false) }
-    var thu by remember { mutableStateOf(false) }
-    var fri by remember { mutableStateOf(false) }
-    var sat by remember { mutableStateOf(false) }
-    var sun by remember { mutableStateOf(false) }
-
-    // ID de la misión que se está editando (null si es nueva)
-    var editingMissionId by remember { mutableStateOf<Int?>(null) }
-
-    // Escuchar las misiones guardadas en tiempo real
     val missionsList by viewModel.allMissions.collectAsState(initial = emptyList())
 
+    Scaffold(
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = {
+                    editingMission = null
+                    showSheet = true
+                },
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Añadir misión")
+            }
+        }
+    ) { padding ->
+        Column(modifier = Modifier.padding(padding).fillMaxSize().padding(16.dp)) {
+            Text("Misiones Actuales", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (missionsList.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("No hay misiones. ¡Crea una!", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                    items(missionsList) { mission ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            onClick = {
+                                editingMission = mission
+                                showSheet = true
+                            }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(mission.message, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        text = String.format(Locale.getDefault(), "⏰ %02d:%02d", mission.hour, mission.minute),
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = buildDaysString(mission),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Row {
+                                    IconButton(onClick = {
+                                        editingMission = mission
+                                        showSheet = true
+                                    }) {
+                                        Icon(Icons.Default.Edit, contentDescription = "Editar", tint = MaterialTheme.colorScheme.tertiary)
+                                    }
+                                    IconButton(onClick = { viewModel.delete(mission) }) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Borrar", tint = MaterialTheme.colorScheme.error)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showSheet) {
+            ModalBottomSheet(
+                onDismissRequest = { 
+                    showSheet = false
+                    editingMission = null
+                },
+                sheetState = sheetState
+            ) {
+                MissionEditorContent(
+                    initialMission = editingMission,
+                    onSave = { mission ->
+                        viewModel.saveMission(mission)
+                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                            showSheet = false
+                            editingMission = null
+                        }
+                    },
+                    onCancel = {
+                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                            showSheet = false
+                            editingMission = null
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MissionEditorContent(
+    initialMission: Mission?,
+    onSave: (Mission) -> Unit,
+    onCancel: () -> Unit
+) {
+    var message by remember { mutableStateOf(initialMission?.message ?: "") }
+    var hour by remember { mutableIntStateOf(initialMission?.hour ?: 8) }
+    var minute by remember { mutableIntStateOf(initialMission?.minute ?: 0) }
+    
+    var mon by remember { mutableStateOf(initialMission?.monday ?: false) }
+    var tue by remember { mutableStateOf(initialMission?.tuesday ?: false) }
+    var wed by remember { mutableStateOf(initialMission?.wednesday ?: false) }
+    var thu by remember { mutableStateOf(initialMission?.thursday ?: false) }
+    var fri by remember { mutableStateOf(initialMission?.friday ?: false) }
+    var sat by remember { mutableStateOf(initialMission?.saturday ?: false) }
+    var sun by remember { mutableStateOf(initialMission?.sunday ?: false) }
+
+    var showTimePicker by remember { mutableStateOf(false) }
+
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
+        modifier = Modifier.fillMaxWidth().padding(24.dp).navigationBarsPadding(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = if (editingMissionId == null) "Crear Nueva Misión" else "Editando Misión",
-            style = MaterialTheme.typography.titleLarge
+            text = if (initialMission == null) "Nueva Misión" else "Editar Misión",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         OutlinedTextField(
             value = message,
             onValueChange = { message = it },
-            label = { Text("Mensaje (Ej: ¡Haz la cama!)") },
-            modifier = Modifier.fillMaxWidth()
+            label = { Text("¿Qué debes hacer?") },
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.medium
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            OutlinedTextField(
-                value = hourText,
-                onValueChange = { hourText = it },
-                label = { Text("Hora (0-23)") },
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            OutlinedTextField(
-                value = minuteText,
-                onValueChange = { minuteText = it },
-                label = { Text("Minuto (0-59)") },
-                modifier = Modifier.weight(1f)
-            )
+        // Selector de Hora Moderno (Click para abrir reloj)
+        Card(
+            modifier = Modifier.fillMaxWidth().clickable { showTimePicker = true },
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)),
+            shape = MaterialTheme.shapes.medium
+        ) {
+            Column(modifier = Modifier.padding(16.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Hora Programada", style = MaterialTheme.typography.labelMedium)
+                Text(
+                    text = String.format(Locale.getDefault(), "%02d:%02d", hour, minute),
+                    style = MaterialTheme.typography.displayMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text("Toca para cambiar", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
 
+        Spacer(modifier = Modifier.height(24.dp))
+        Text("Días de activación", style = MaterialTheme.typography.titleSmall, modifier = Modifier.align(Alignment.Start))
         Spacer(modifier = Modifier.height(8.dp))
-        Text("Días que debe sonar:", style = MaterialTheme.typography.bodyMedium)
 
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
+            horizontalArrangement = Arrangement.SpaceEvenly
         ) {
             DayCheckbox("L", mon) { mon = it }
             DayCheckbox("M", tue) { tue = it }
@@ -173,132 +333,91 @@ fun MainScreen(modifier: Modifier = Modifier, viewModel: MissionViewModel = view
             DayCheckbox("D", sun) { sun = it }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(32.dp))
 
-        Row(modifier = Modifier.fillMaxWidth()) {
-            if (editingMissionId != null) {
-                Button(
-                    onClick = {
-                        // Cancelar edición
-                        editingMissionId = null
-                        message = ""
-                        hourText = ""
-                        minuteText = ""
-                        mon = false; tue = false; wed = false; thu = false; fri = false; sat = false; sun = false
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-                ) {
-                    Text("Cancelar")
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-            }
-
-            Button(
-                onClick = {
-                    val h = hourText.toIntOrNull()
-                    val m = minuteText.toIntOrNull()
-
-                    if (message.isNotBlank() && h != null && m != null && h in 0..23 && m in 0..59) {
-                        val updatedMission = Mission(
-                            id = editingMissionId ?: 0,
+        Button(
+            onClick = {
+                if (message.isNotBlank()) {
+                    onSave(
+                        Mission(
+                            id = initialMission?.id ?: 0,
                             message = message,
-                            hour = h,
-                            minute = m,
+                            hour = hour,
+                            minute = minute,
                             monday = mon, tuesday = tue, wednesday = wed,
                             thursday = thu, friday = fri, saturday = sat, sunday = sun
                         )
-                        viewModel.saveMission(updatedMission)
-                        
-                        // Limpiar formulario y resetear ID
-                        editingMissionId = null
-                        message = ""
-                        hourText = ""
-                        minuteText = ""
-                        mon = false; tue = false; wed = false; thu = false; fri = false; sat = false; sun = false
-                        
-                        Toast.makeText(context, "¡Misión guardada!", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(context, "Datos incorrectos", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                modifier = Modifier.weight(if (editingMissionId == null) 1f else 2f)
-            ) {
-                Text(if (editingMissionId == null) "Guardar Misión" else "Actualizar Misión")
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        // Botones de prueba
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            Button(onClick = {
-                if (checkPermissions(context, hasNotificationPermission, permissionLauncher)) {
-                    val intent = Intent(context, BubbleForegroundService::class.java)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        context.startForegroundService(intent)
-                    } else {
-                        context.startService(intent)
-                    }
+                    )
                 }
-            }) {
-                Text("Burbuja Ya")
-            }
-
-            Button(onClick = {
-                testAlarm(context)
-            }) {
-                Text("Alarma (10s)")
-            }
+            },
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            shape = MaterialTheme.shapes.medium
+        ) {
+            Text("Guardar Misión", style = MaterialTheme.typography.titleMedium)
         }
-
+        
+        TextButton(onClick = onCancel) {
+            Text("Cancelar")
+        }
         Spacer(modifier = Modifier.height(16.dp))
-        Text("Misiones Actuales:", style = MaterialTheme.typography.titleMedium)
+    }
 
-        LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
-            items(missionsList) { mission ->
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+    if (showTimePicker) {
+        TimePickerDialog(
+            onDismissRequest = { showTimePicker = false },
+            onConfirm = { selectedHour, selectedMinute ->
+                hour = selectedHour
+                minute = selectedMinute
+                showTimePicker = false
+            },
+            initialHour = hour,
+            initialMinute = minute
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TimePickerDialog(
+    onDismissRequest: () -> Unit,
+    onConfirm: (Int, Int) -> Unit,
+    initialHour: Int,
+    initialMinute: Int
+) {
+    val timePickerState = rememberTimePickerState(
+        initialHour = initialHour,
+        initialMinute = initialMinute,
+        is24Hour = true
+    )
+
+    Dialog(onDismissRequest = onDismissRequest) {
+        Card(
+            shape = MaterialTheme.shapes.extraLarge,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Selecciona la hora",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(bottom = 24.dp)
+                )
+                
+                TimePicker(state = timePickerState)
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
+                    horizontalArrangement = Arrangement.End
                 ) {
-                    Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(mission.message, style = MaterialTheme.typography.bodyLarge)
-                                Text(
-                                    String.format(Locale.getDefault(), "Hora: %02d:%02d", mission.hour, mission.minute),
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                            Row {
-                                Button(
-                                    onClick = {
-                                        // Cargar datos en el formulario para editar
-                                        editingMissionId = mission.id
-                                        message = mission.message
-                                        hourText = mission.hour.toString()
-                                        minuteText = mission.minute.toString()
-                                        mon = mission.monday
-                                        tue = mission.tuesday
-                                        wed = mission.wednesday
-                                        thu = mission.thursday
-                                        fri = mission.friday
-                                        sat = mission.saturday
-                                        sun = mission.sunday
-                                    },
-                                    modifier = Modifier.padding(end = 4.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
-                                ) {
-                                    Text("Editar")
-                                }
-                                Button(onClick = { viewModel.delete(mission) }) {
-                                    Text("Borrar")
-                                }
-                            }
-                        }
+                    TextButton(onClick = onDismissRequest) {
+                        Text("Cancelar")
+                    }
+                    TextButton(onClick = {
+                        onConfirm(timePickerState.hour, timePickerState.minute)
+                    }) {
+                        Text("Aceptar")
                     }
                 }
             }
@@ -309,30 +428,25 @@ fun MainScreen(modifier: Modifier = Modifier, viewModel: MissionViewModel = view
 @Composable
 fun DayCheckbox(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, style = MaterialTheme.typography.bodySmall)
-        Checkbox(checked = checked, onCheckedChange = onCheckedChange)
+        Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium)
+        Checkbox(
+            checked = checked, 
+            onCheckedChange = onCheckedChange,
+            colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
+        )
     }
 }
 
-private fun checkPermissions(
-    context: Context, 
-    hasNotificationPermission: Boolean, 
-    permissionLauncher: androidx.activity.result.ActivityResultLauncher<String>
-): Boolean {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
-        permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        return false
-    }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
-        Toast.makeText(context, "Concede el permiso de mostrar sobre otras apps", Toast.LENGTH_LONG).show()
-        val intent = Intent(
-            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-            Uri.parse("package:${context.packageName}")
-        )
-        context.startActivity(intent)
-        return false
-    }
-    return true
+fun buildDaysString(m: Mission): String {
+    val days = mutableListOf<String>()
+    if (m.monday) days.add("Lun")
+    if (m.tuesday) days.add("Mar")
+    if (m.wednesday) days.add("Mie")
+    if (m.thursday) days.add("Jue")
+    if (m.friday) days.add("Vie")
+    if (m.saturday) days.add("Sab")
+    if (m.sunday) days.add("Dom")
+    return if (days.size == 7) "Todos los días" else if (days.isEmpty()) "Ningún día" else days.joinToString(", ")
 }
 
 private fun testAlarm(context: Context) {
@@ -361,13 +475,5 @@ private fun testAlarm(context: Context) {
             val intentOverlay = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
             context.startActivity(intentOverlay)
         }
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun MainScreenPreview() {
-    BubbleDisciplineTheme {
-        MainScreen()
     }
 }
