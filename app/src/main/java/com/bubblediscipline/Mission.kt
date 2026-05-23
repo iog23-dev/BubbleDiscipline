@@ -10,6 +10,7 @@ data class Mission(
     val hour: Int,            // Hora en formato 24h (0-23)
     val minute: Int,          // Minuto (0-59)
     val isEnabled: Boolean = true, // Si la alarma está activa o apagada
+    val category: String = "General", // Categoría de la tarea
     
     // Días de la semana
     val monday: Boolean = false,

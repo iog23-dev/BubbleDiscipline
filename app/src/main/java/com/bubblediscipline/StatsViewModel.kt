@@ -13,14 +13,19 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 
+data class PeriodStats(
+    val activated: Int,
+    val exploded: Int,
+    val failed: Int,
+    val panic: Int
+)
+
 data class Statistics(
-    val totalActivated: Int,
-    val totalExploded: Int,
-    val totalFailed: Int,
-    val totalPanic: Int,
-    val avgTimeSeconds: Long,
-    val weekActivated: Int,
-    val monthActivated: Int
+    val day: PeriodStats,
+    val week: PeriodStats,
+    val month: PeriodStats,
+    val total: PeriodStats,
+    val avgTimeSeconds: Long
 )
 
 data class DayStatus(
@@ -39,35 +44,55 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
         val calendar = Calendar.getInstance()
         
         calendar.timeInMillis = now
+        calendar.set(Calendar.HOUR_OF_DAY, 0)
+        calendar.set(Calendar.MINUTE, 0)
+        calendar.set(Calendar.SECOND, 0)
+        calendar.set(Calendar.MILLISECOND, 0)
+        val startOfDay = calendar.timeInMillis
+
+        calendar.timeInMillis = now
         calendar.set(Calendar.DAY_OF_WEEK, calendar.firstDayOfWeek)
         calendar.set(Calendar.HOUR_OF_DAY, 0)
+        calendar.set(Calendar.MINUTE, 0)
+        calendar.set(Calendar.SECOND, 0)
+        calendar.set(Calendar.MILLISECOND, 0)
         val startOfWeek = calendar.timeInMillis
         
         calendar.timeInMillis = now
         calendar.set(Calendar.DAY_OF_MONTH, 1)
         calendar.set(Calendar.HOUR_OF_DAY, 0)
+        calendar.set(Calendar.MINUTE, 0)
+        calendar.set(Calendar.SECOND, 0)
+        calendar.set(Calendar.MILLISECOND, 0)
         val startOfMonth = calendar.timeInMillis
 
-        val exploded = list.filter { it.completionTime != null && !it.wasPanicUsed }
-        val panic = list.count { it.wasPanicUsed }
-        
-        val failed = list.count { 
-            it.completionTime != null && !it.wasPanicUsed && (it.completionTime - it.activationTime > 30 * 60 * 1000) 
+        fun calculatePeriodStats(items: List<MissionHistory>): PeriodStats {
+            val exploded = items.count { it.completionTime != null && !it.wasPanicUsed }
+            val panic = items.count { it.wasPanicUsed }
+            val failed = items.count { 
+                it.completionTime != null && !it.wasPanicUsed && (it.completionTime - it.activationTime > 30 * 60 * 1000) 
+            }
+            return PeriodStats(items.size, exploded, failed, panic)
         }
 
-        val totalTime = exploded.sumOf { it.completionTime!! - it.activationTime }
-        val avgTime = if (exploded.isNotEmpty()) (totalTime / exploded.size) / 1000 else 0L
+        val explodedList = list.filter { it.completionTime != null && !it.wasPanicUsed }
+        val totalTime = explodedList.sumOf { it.completionTime!! - it.activationTime }
+        val avgTime = if (explodedList.isNotEmpty()) (totalTime / explodedList.size) / 1000 else 0L
 
         Statistics(
-            totalActivated = list.size,
-            totalExploded = exploded.size,
-            totalFailed = failed,
-            totalPanic = panic,
-            avgTimeSeconds = avgTime,
-            weekActivated = list.count { it.activationTime >= startOfWeek },
-            monthActivated = list.count { it.activationTime >= startOfMonth }
+            day = calculatePeriodStats(list.filter { it.activationTime >= startOfDay }),
+            week = calculatePeriodStats(list.filter { it.activationTime >= startOfWeek }),
+            month = calculatePeriodStats(list.filter { it.activationTime >= startOfMonth }),
+            total = calculatePeriodStats(list),
+            avgTimeSeconds = avgTime
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), Statistics(0, 0, 0, 0, 0, 0, 0))
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), Statistics(
+        PeriodStats(0, 0, 0, 0),
+        PeriodStats(0, 0, 0, 0),
+        PeriodStats(0, 0, 0, 0),
+        PeriodStats(0, 0, 0, 0),
+        0
+    ))
 
     fun resetStats() {
         viewModelScope.launch {

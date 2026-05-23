@@ -341,8 +341,28 @@ class BubbleForegroundService : Service() {
                 if (activeBubbles.isEmpty()) { isAnimationRunning = false; return }
                 activeBubbles.forEach { bubble ->
                     bubble.posX += bubble.speedX; bubble.posY += bubble.speedY
-                    if (bubble.posX <= 0 || bubble.posX >= (metrics.widthPixels - bubbleSize)) bubble.speedX *= -1f
-                    if (bubble.posY <= 0 || bubble.posY >= (metrics.heightPixels - bubbleSize)) bubble.speedY *= -1f
+                    
+                    val maxX = (metrics.widthPixels - bubbleSize).toFloat()
+                    val maxY = (metrics.heightPixels - bubbleSize).toFloat()
+
+                    // Rebote en eje X con corrección de posición para evitar vibración
+                    if (bubble.posX <= 0) {
+                        bubble.posX = 0f
+                        bubble.speedX = Math.abs(bubble.speedX)
+                    } else if (bubble.posX >= maxX) {
+                        bubble.posX = maxX
+                        bubble.speedX = -Math.abs(bubble.speedX)
+                    }
+
+                    // Rebote en eje Y con corrección de posición para evitar vibración
+                    if (bubble.posY <= 0) {
+                        bubble.posY = 0f
+                        bubble.speedY = Math.abs(bubble.speedY)
+                    } else if (bubble.posY >= maxY) {
+                        bubble.posY = maxY
+                        bubble.speedY = -Math.abs(bubble.speedY)
+                    }
+
                     bubble.view.x = bubble.posX; bubble.view.y = bubble.posY
                 }
                 animationHandler.postDelayed(this, 16)
@@ -395,6 +415,30 @@ class BubbleForegroundService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(CHANNEL_ID, "Servicio de Bloqueo", NotificationManager.IMPORTANCE_HIGH)
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        
+        // Cuando cambia la orientación, reajustamos las burbujas para que no se queden fuera
+        val metrics = resources.displayMetrics
+        val bubbleSize = (120 * metrics.density).toInt()
+        
+        activeBubbles.forEach { bubble ->
+            // Si la burbuja está fuera de los nuevos límites, la movemos dentro
+            val maxX = (metrics.widthPixels - bubbleSize).toFloat()
+            val maxY = (metrics.heightPixels - bubbleSize).toFloat()
+            
+            if (bubble.posX > maxX) bubble.posX = maxX
+            if (bubble.posY > maxY) bubble.posY = maxY
+            
+            // Asegurar que no sea negativa
+            if (bubble.posX < 0) bubble.posX = 0f
+            if (bubble.posY < 0) bubble.posY = 0f
+            
+            bubble.view.x = bubble.posX
+            bubble.view.y = bubble.posY
         }
     }
 }

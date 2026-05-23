@@ -25,9 +25,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -127,6 +129,7 @@ fun MainNavigationWrapper(
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                 
                 DrawerItem("Mis Misiones", Icons.Default.Star, currentScreen) { currentScreen = "Misiones"; scope.launch { drawerState.close() } }
+                DrawerItem("El Calabozo", Icons.Default.Gavel, currentScreen) { currentScreen = "El Calabozo"; scope.launch { drawerState.close() } }
                 DrawerItem("Vacaciones", Icons.Default.BeachAccess, currentScreen) { currentScreen = "Vacaciones"; scope.launch { drawerState.close() } }
                 DrawerItem("Estadísticas", Icons.Default.BarChart, currentScreen) { currentScreen = "Estadísticas"; scope.launch { drawerState.close() } }
                 DrawerItem("Ajustes", Icons.Default.Settings, currentScreen) { currentScreen = "Ajustes"; scope.launch { drawerState.close() } }
@@ -161,6 +164,7 @@ fun MainNavigationWrapper(
             Box(modifier = Modifier.padding(innerPadding)) {
                 when (currentScreen) {
                     "Misiones" -> MissionsScreen(missionViewModel, statsViewModel, primaryColor)
+                    "El Calabozo" -> DungeonScreen(statsViewModel)
                     "Vacaciones" -> VacationsScreen(settingsViewModel)
                     "Estadísticas" -> StatsScreen(statsViewModel)
                     "Ajustes" -> SettingsScreen(settingsViewModel, statsViewModel)
@@ -364,33 +368,91 @@ fun StatsScreen(viewModel: StatsViewModel) {
         Text("Tus Logros", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(24.dp))
 
-        Row(modifier = Modifier.fillMaxWidth()) {
-            StatCard("Semana", stats.weekActivated.toString(), Modifier.weight(1f))
-            StatCard("Mes", stats.monthActivated.toString(), Modifier.weight(1f))
-        }
-        StatCard("Total Activadas", stats.totalActivated.toString(), Modifier.fillMaxWidth())
+        StatSection("Hoy", stats.day)
+        StatSection("Esta Semana", stats.week)
+        StatSection("Este Mes", stats.month)
+        StatSection("Histórico Total", stats.total)
         
         Spacer(modifier = Modifier.height(16.dp))
         
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
-                StatLine("Burbujas Explotadas", stats.totalExploded.toString(), Color.Green)
-                StatLine("Incumplidas (>30min)", stats.totalFailed.toString(), Color.Yellow)
-                StatLine("Botón de Pánico", stats.totalPanic.toString(), Color.Red)
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                StatLine("Tiempo Medio", "${stats.avgTimeSeconds} seg", MaterialTheme.colorScheme.primary)
+                StatLine("Tiempo Medio de Reacción", "${stats.avgTimeSeconds} seg", MaterialTheme.colorScheme.primary)
             }
         }
     }
 }
 
 @Composable
-fun StatCard(label: String, value: String, modifier: Modifier) {
-    Card(modifier = modifier.padding(4.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-        Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(label, style = MaterialTheme.typography.labelMedium)
-            Text(value, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+fun StatSection(title: String, data: PeriodStats) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                StatItem("Activadas", data.activated.toString(), MaterialTheme.colorScheme.onSurface)
+                StatItem("Explotadas", data.exploded.toString(), Color.Green)
+                StatItem("Retrasadas", data.failed.toString(), Color.Yellow)
+                StatItem("Pánico", data.panic.toString(), Color.Red)
+            }
         }
+    }
+}
+
+@Composable
+fun DungeonScreen(viewModel: StatsViewModel) {
+    val history by viewModel.allHistory.collectAsState(initial = emptyList())
+    val failedMissions = history.filter { it.wasPanicUsed }.sortedByDescending { it.activationTime }
+    val sdf = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Text("El Calabozo", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Color.Red)
+        Text("Aquí yacen tus fracasos más estrepitosos.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (failedMissions.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.SentimentVerySatisfied, contentDescription = null, modifier = Modifier.size(64.dp), tint = Color.Gray)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("¡Limpio! No tienes pecados registrados.", color = Color.Gray)
+                }
+            }
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(failedMissions) { entry: MissionHistory ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f))
+                    ) {
+                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Dangerous, contentDescription = null, tint = Color.Red)
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text(entry.missionMessage, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = "Cancelada el ${sdf.format(Date(entry.activationTime))}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StatItem(label: String, value: String, color: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = color)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -412,6 +474,17 @@ fun SettingsScreen(viewModel: SettingsViewModel, statsViewModel: StatsViewModel)
 
     var contactNumber by remember { mutableStateOf(whatsappContact) }
     var showConfirmReset by remember { mutableStateOf(false) }
+    var selectedTab by remember { mutableIntStateOf(0) }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream"),
+        onResult = { uri -> uri?.let { viewModel.exportDatabase(it) } }
+    )
+
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+        onResult = { uri -> uri?.let { viewModel.importDatabase(it) } }
+    )
 
     // Sincronizar estado local con DataStore cuando cambie externamente
     LaunchedEffect(whatsappContact) {
@@ -443,85 +516,103 @@ fun SettingsScreen(viewModel: SettingsViewModel, statsViewModel: StatsViewModel)
         }
     )
 
-    Column(modifier = Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState())) {
-        Text("Ajustes de App", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        
-        Spacer(modifier = Modifier.height(24.dp))
-        Text("Tema Visual", style = MaterialTheme.typography.titleMedium)
-        Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            listOf("Rosa", "Azul", "Verde", "Naranja", "Morado").forEach { theme ->
-                FilterChip(selected = appTheme == theme, onClick = { viewModel.setAppTheme(theme) }, label = { Text(theme) })
-            }
+    Column(modifier = Modifier.fillMaxSize()) {
+        TabRow(selectedTabIndex = selectedTab) {
+            Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Personalización") })
+            Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Disciplina") })
+            Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("Sistema") })
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
-        Text("Velocidad de Burbujas", style = MaterialTheme.typography.titleMedium)
-        Slider(value = bubbleSpeed, onValueChange = { viewModel.setBubbleSpeed(it) }, valueRange = 5f..30f)
-
-        Spacer(modifier = Modifier.height(32.dp))
-        Text("Configuración de Castigo", style = MaterialTheme.typography.titleMedium)
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text("Enviar mensaje de WhatsApp", style = MaterialTheme.typography.bodyLarge)
-            Switch(
-                checked = sendPanicMessage,
-                onCheckedChange = { viewModel.setSendPanicMessage(it) }
-            )
-        }
-        
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        if (sendPanicMessage) {
-            OutlinedTextField(
-                value = contactNumber,
-                onValueChange = { 
-                    contactNumber = it
-                    viewModel.setWhatsappContact(it)
-                },
-                label = { Text("Número WhatsApp") },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Ej: 34600000000") },
-                trailingIcon = {
-                    IconButton(onClick = {
-                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
-                            contactPickerLauncher.launch(null)
-                        } else {
-                            permissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+        Column(modifier = Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState())) {
+            when (selectedTab) {
+                0 -> { // Personalización
+                    Text("Tema Visual", style = MaterialTheme.typography.titleMedium)
+                    Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        listOf("Rosa", "Azul", "Verde", "Naranja", "Morado").forEach { theme ->
+                            FilterChip(selected = appTheme == theme, onClick = { viewModel.setAppTheme(theme) }, label = { Text(theme) })
                         }
-                    }) {
-                        Icon(Icons.Default.ContactPage, contentDescription = "Elegir contacto")
+                    }
+
+                    Spacer(modifier = Modifier.height(32.dp))
+                    Text("Velocidad de Burbujas", style = MaterialTheme.typography.titleMedium)
+                    Slider(value = bubbleSpeed, onValueChange = { viewModel.setBubbleSpeed(it) }, valueRange = 5f..30f)
+                }
+                1 -> { // Disciplina (Castigo)
+                    Text("Configuración de Castigo", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Enviar mensaje de WhatsApp", style = MaterialTheme.typography.bodyLarge)
+                        Switch(
+                            checked = sendPanicMessage,
+                            onCheckedChange = { viewModel.setSendPanicMessage(it) }
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    if (sendPanicMessage) {
+                        OutlinedTextField(
+                            value = contactNumber,
+                            onValueChange = { 
+                                contactNumber = it
+                                viewModel.setWhatsappContact(it)
+                            },
+                            label = { Text("Número WhatsApp") },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("Ej: 34600000000") },
+                            trailingIcon = {
+                                IconButton(onClick = {
+                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
+                                        contactPickerLauncher.launch(null)
+                                    } else {
+                                        permissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+                                    }
+                                }) {
+                                    Icon(Icons.Default.ContactPage, contentDescription = "Elegir contacto")
+                                }
+                            }
+                        )
+                        Text(
+                            "Se enviará un mensaje a este contacto si usas el botón del pánico.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
                     }
                 }
-            )
-            Text(
-                "Se enviará un mensaje a este contacto si usas el botón del pánico.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-        } else {
-            Text(
-                "El envío de mensaje está desactivado. Las burbujas se eliminarán sin castigo.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+                2 -> { // Sistema (Datos, Backup)
+                    Text("Copia de Seguridad", style = MaterialTheme.typography.titleMedium)
+                    Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { exportLauncher.launch("bubble_discipline_backup.db") }, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.FileUpload, contentDescription = null)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Exportar")
+                        }
+                        Button(onClick = { importLauncher.launch(arrayOf("application/octet-stream", "*/*")) }, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.FileDownload, contentDescription = null)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Importar")
+                        }
+                    }
 
-        Spacer(modifier = Modifier.height(32.dp))
-        Text("Datos", style = MaterialTheme.typography.titleMedium)
-        Button(
-            onClick = { showConfirmReset = true },
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)
-        ) {
-            Icon(Icons.Default.Refresh, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Reiniciar Estadísticas")
+                    Spacer(modifier = Modifier.height(32.dp))
+                    Text("Zona Peligrosa", style = MaterialTheme.typography.titleMedium, color = Color.Red)
+                    Button(
+                        onClick = { showConfirmReset = true },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Reiniciar Estadísticas")
+                    }
+                }
+            }
         }
     }
 
@@ -579,6 +670,7 @@ private fun getPhoneNumber(context: Context, contactUri: Uri): String? {
 
 @Composable
 fun BubbleItem(mission: Mission, primaryColor: Color, onClick: () -> Unit) {
+    val categoryIcon = getCategoryIcon(mission.category)
     Box(
         modifier = Modifier.size(140.dp).clip(CircleShape).alpha(if (mission.isEnabled) 1f else 0.5f)
             .background(Brush.radialGradient(listOf(Color(0xFF424242), Color(0xFF212121))))
@@ -587,7 +679,7 @@ fun BubbleItem(mission: Mission, primaryColor: Color, onClick: () -> Unit) {
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = if (mission.isEnabled) "🫧" else "💤", fontSize = 24.sp)
+            Text(text = if (mission.isEnabled) categoryIcon else "💤", fontSize = 24.sp)
             Text(text = mission.message, style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.Center, maxLines = 2, color = Color.White)
             Text(text = String.format(Locale.getDefault(), "%02d:%02d", mission.hour, mission.minute), style = MaterialTheme.typography.labelSmall, color = if (mission.isEnabled) primaryColor else Color.Gray, fontWeight = FontWeight.Bold)
         }
@@ -597,6 +689,7 @@ fun BubbleItem(mission: Mission, primaryColor: Color, onClick: () -> Unit) {
 @Composable
 fun FocusedBubbleView(mission: Mission, primaryColor: Color, onEdit: () -> Unit, onDelete: () -> Unit) {
     val size by animateDpAsState(targetValue = 300.dp, animationSpec = tween(500), label = "")
+    val categoryIcon = getCategoryIcon(mission.category)
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Box(
             modifier = Modifier.size(size).clip(CircleShape).background(Brush.radialGradient(listOf(Color(0xFF424242), Color(0xFF121212))))
@@ -604,7 +697,9 @@ fun FocusedBubbleView(mission: Mission, primaryColor: Color, onEdit: () -> Unit,
             contentAlignment = Alignment.Center
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(text = "${if (mission.isEnabled) "🫧" else "💤"} ${mission.message}", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center, color = Color.White, fontWeight = FontWeight.Bold)
+                Text(text = "${if (mission.isEnabled) categoryIcon else "💤"} ${mission.message}", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center, color = Color.White, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(text = mission.category, style = MaterialTheme.typography.labelLarge, color = primaryColor.copy(alpha = 0.8f))
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(text = String.format(Locale.getDefault(), "⏰ %02d:%02d", mission.hour, mission.minute), style = MaterialTheme.typography.headlineSmall, color = if (mission.isEnabled) primaryColor else Color.Gray, fontWeight = FontWeight.ExtraBold)
                 Spacer(modifier = Modifier.height(8.dp))
@@ -632,15 +727,51 @@ fun MissionEditorContent(initialMission: Mission?, primaryColor: Color, onSave: 
     var hour by remember { mutableIntStateOf(initialMission?.hour ?: 8) }
     var minute by remember { mutableIntStateOf(initialMission?.minute ?: 0) }
     var isEnabled by remember { mutableStateOf(initialMission?.isEnabled ?: true) }
+    var category by remember { mutableStateOf(initialMission?.category ?: "General") }
     var mon by remember { mutableStateOf(initialMission?.monday ?: false) }; var tue by remember { mutableStateOf(initialMission?.tuesday ?: false) }
     var wed by remember { mutableStateOf(initialMission?.wednesday ?: false) }; var thu by remember { mutableStateOf(initialMission?.thursday ?: false) }
     var fri by remember { mutableStateOf(initialMission?.friday ?: false) }; var sat by remember { mutableStateOf(initialMission?.saturday ?: false) }
     var sun by remember { mutableStateOf(initialMission?.sunday ?: false) }
     var showTimePicker by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxWidth().padding(24.dp).navigationBarsPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
+    val categories = listOf("General", "Salud", "Trabajo", "Deporte", "Alimentación", "Estudios", "Juego", "Familia", "Amigos", "Médico", "Fiesta", "Hogar", "Dinero", "Viajes")
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxWidth().padding(24.dp).navigationBarsPadding().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(text = if (initialMission == null) "Nueva Misión" else "Editar Misión", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         OutlinedTextField(value = message, onValueChange = { message = it }, label = { Text("¿Qué debes hacer?") }, modifier = Modifier.fillMaxWidth())
+        
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = !expanded },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            OutlinedTextField(
+                value = category,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Categoría") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier.menuAnchor().fillMaxWidth()
+            )
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                categories.forEach { selectionOption ->
+                    DropdownMenuItem(
+                        text = { Text(selectionOption) },
+                        onClick = {
+                            category = selectionOption
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+
         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Misión Activa"); Switch(checked = isEnabled, onCheckedChange = { isEnabled = it }, colors = SwitchDefaults.colors(checkedThumbColor = primaryColor))
         }
@@ -653,7 +784,7 @@ fun MissionEditorContent(initialMission: Mission?, primaryColor: Color, onSave: 
             DayCheckbox("L", mon) { mon = it }; DayCheckbox("M", tue) { tue = it }; DayCheckbox("X", wed) { wed = it }; DayCheckbox("J", thu) { thu = it }
             DayCheckbox("V", fri) { fri = it }; DayCheckbox("S", sat) { sat = it }; DayCheckbox("D", sun) { sun = it }
         }
-        Button(onClick = { if (message.isNotBlank()) onSave(Mission(id = initialMission?.id ?: 0, message = message, hour = hour, minute = minute, isEnabled = isEnabled, monday = mon, tuesday = tue, wednesday = wed, thursday = thu, friday = fri, saturday = sat, sunday = sun)) },
+        Button(onClick = { if (message.isNotBlank()) onSave(Mission(id = initialMission?.id ?: 0, message = message, hour = hour, minute = minute, isEnabled = isEnabled, category = category, monday = mon, tuesday = tue, wednesday = wed, thursday = thu, friday = fri, saturday = sat, sunday = sun)) },
             modifier = Modifier.fillMaxWidth().padding(top = 24.dp).height(56.dp), colors = ButtonDefaults.buttonColors(containerColor = primaryColor)) { Text("Guardar Misión") }
         TextButton(onClick = onCancel) { Text("Cancelar", color = primaryColor) }
     }
@@ -694,6 +825,25 @@ fun buildDaysString(m: Mission): String {
     if (m.monday) days.add("Lun"); if (m.tuesday) days.add("Mar"); if (m.wednesday) days.add("Mie")
     if (m.thursday) days.add("Jue"); if (m.friday) days.add("Vie"); if (m.saturday) days.add("Sab"); if (m.sunday) days.add("Dom")
     return if (days.size == 7) "Todos los días" else if (days.isEmpty()) "Ningún día" else days.joinToString(", ")
+}
+
+fun getCategoryIcon(category: String): String {
+    return when (category) {
+        "Salud" -> "🍎"
+        "Trabajo" -> "💼"
+        "Deporte" -> "🏃"
+        "Alimentación" -> "🍲"
+        "Estudios" -> "📚"
+        "Juego" -> "🎮"
+        "Familia" -> "👨‍👩‍👧‍👦"
+        "Amigos" -> "👫"
+        "Médico" -> "🩺"
+        "Fiesta" -> "🥳"
+        "Hogar" -> "🏠"
+        "Dinero" -> "💰"
+        "Viajes" -> "✈️"
+        else -> "🫧"
+    }
 }
 
 private fun testAlarm(context: Context) {
