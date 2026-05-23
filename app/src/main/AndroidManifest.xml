@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <application
         android:allowBackup="true"
@@ -34,7 +36,7 @@
             android:name=".BubbleForegroundService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
+            android:foregroundServiceType="specialUse|mediaProjection">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Bubble productivity locking system" />
@@ -43,6 +45,11 @@
         <receiver
             android:name=".AlarmReceiver"
             android:enabled="true"
+            android:exported="false" />
+
+        <activity
+            android:name=".ScreenCaptureActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
             android:exported="false" />
     </application>
 </manifest>

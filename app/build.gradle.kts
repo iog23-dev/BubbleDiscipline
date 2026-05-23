@@ -53,6 +53,9 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
     implementation(libs.datastore.preferences)
+    implementation(libs.mlkit.text.recognition)
+    implementation(libs.play.services.tasks)
+    implementation(libs.kotlinx.coroutines.play.services)
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

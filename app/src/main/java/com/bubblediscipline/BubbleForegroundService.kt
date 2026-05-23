@@ -1,28 +1,18 @@
 package com.bubblediscipline
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
-import android.content.Context
-import android.content.Intent
+import android.app.*
+import android.content.*
 import android.content.pm.ServiceInfo
-import android.graphics.Color
-import android.graphics.PixelFormat
-import android.graphics.Point
+import android.graphics.*
 import android.graphics.drawable.GradientDrawable
-import android.os.Build
-import android.os.Handler
-import android.os.IBinder
-import android.os.Looper
+import android.hardware.display.DisplayManager
+import android.media.ImageReader
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
+import android.os.*
 import android.util.Log
-import android.view.Gravity
-import android.view.KeyEvent
-import android.view.View
-import android.view.WindowManager
-import android.widget.FrameLayout
-import android.widget.TextView
-import android.widget.Toast
+import android.view.*
+import android.widget.*
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collectLatest
@@ -35,16 +25,10 @@ class BlockingView(context: Context, private val onEmergencyExit: () -> Unit) : 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && event.action == KeyEvent.ACTION_DOWN) {
             val currentTime = System.currentTimeMillis()
-            if (currentTime - lastClickTime < 2000) {
-                volumeDownCount++
-            } else {
-                volumeDownCount = 1
-            }
+            if (currentTime - lastClickTime < 2000) volumeDownCount++
+            else volumeDownCount = 1
             lastClickTime = currentTime
-
-            if (volumeDownCount >= 3) {
-                onEmergencyExit()
-            }
+            if (volumeDownCount >= 3) onEmergencyExit()
             return true
         }
         return super.dispatchKeyEvent(event)
@@ -52,7 +36,8 @@ class BlockingView(context: Context, private val onEmergencyExit: () -> Unit) : 
 
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
-        if (!hasWindowFocus) {
+        val lp = layoutParams as? WindowManager.LayoutParams
+        if (!hasWindowFocus && lp != null && (lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) == 0) {
             requestFocus()
         }
     }
@@ -60,6 +45,7 @@ class BlockingView(context: Context, private val onEmergencyExit: () -> Unit) : 
 
 data class BubbleInstance(
     val missionId: Int,
+    val historyId: Int,
     val view: TextView,
     var posX: Float,
     var posY: Float,
@@ -84,10 +70,17 @@ class BubbleForegroundService : Service() {
     private var currentBubbleColor = SettingsManager.DEFAULT_COLOR
     private var currentBubbleSpeed = SettingsManager.DEFAULT_SPEED
 
+    private lateinit var historyDao: HistoryDao
+    private val ocrManager = OCRManager()
+
+    private var mediaProjection: MediaProjection? = null
+    private var verifyButton: Button? = null
+
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         settingsManager = SettingsManager(this)
+        historyDao = AppDatabase.getDatabase(this).historyDao()
         
         createNotificationChannel()
         setupBlockingUI()
@@ -96,10 +89,7 @@ class BubbleForegroundService : Service() {
     }
 
     private fun setupBlockingUI() {
-        blockingContainer = BlockingView(this) {
-            Toast.makeText(this, "🚨 CÓDIGO DE EMERGENCIA: Desbloqueando", Toast.LENGTH_LONG).show()
-            stopSelf()
-        }.apply {
+        blockingContainer = BlockingView(this) { handleEmergencyExit() }.apply {
             setBackgroundColor(Color.argb(120, 0, 0, 0))
             isFocusable = true
             isFocusableInTouchMode = true
@@ -126,101 +116,182 @@ class BubbleForegroundService : Service() {
             windowManager.addView(blockingContainer, lp)
             blockingContainer.requestFocus()
         } catch (e: Exception) {
-            Log.e("BubbleService", "Error al bloquear", e)
             stopSelf()
         }
     }
 
-    private fun observeDatabase() {
-        val missionDao = AppDatabase.getDatabase(this).missionDao()
-        serviceScope.launch {
-            missionDao.getAllMissions().collectLatest { missions ->
-                activeBubbles.forEach { bubble ->
-                    val updatedMission = missions.find { it.id == bubble.missionId }
-                    if (updatedMission != null) {
-                        bubble.view.text = "🫧\n${updatedMission.message}"
-                        // Actualizar visibilidad si se desactiva
-                        if (!updatedMission.isEnabled) {
-                           removeBubbleInstance(bubble)
-                        }
-                    }
-                }
+    private fun handleEmergencyExit() {
+        serviceScope.launch(Dispatchers.IO) {
+            val now = System.currentTimeMillis()
+            activeBubbles.forEach { historyDao.markCompleted(it.historyId, now, true) }
+
+            val contact = settingsManager.whatsappContactFlow.first()
+            val shouldSendPanic = settingsManager.sendPanicMessageFlow.first()
+            
+            if (shouldSendPanic && contact.isNotBlank()) {
+                withContext(Dispatchers.Main) { showOcrVerificationMode(contact) }
+            } else {
+                withContext(Dispatchers.Main) { stopSelf() }
             }
         }
     }
 
-    private fun observeSettings() {
-        serviceScope.launch {
-            settingsManager.bubbleColorFlow.collectLatest { colorHex ->
-                currentBubbleColor = colorHex
-                // Actualizar color de burbujas existentes
-                val color = Color.parseColor(colorHex)
-                activeBubbles.forEach { bubble ->
-                    (bubble.view.background as? GradientDrawable)?.setColor(color)
-                }
+    private fun showOcrVerificationMode(contact: String) {
+        val message = "He fracasado con algunas de las tareas, soy un vago."
+        val url = "https://api.whatsapp.com/send?phone=$contact&text=${android.net.Uri.encode(message)}"
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            data = android.net.Uri.parse(url)
+            setPackage("com.whatsapp")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try { startActivity(intent) } catch (e: Exception) {}
+
+        val lp = blockingContainer.layoutParams as WindowManager.LayoutParams
+        lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        blockingContainer.setBackgroundColor(Color.TRANSPARENT)
+        windowManager.updateViewLayout(blockingContainer, lp)
+
+        if (verifyButton == null) {
+            verifyButton = Button(this).apply {
+                text = "VERIFICAR ENVÍO"
+                setBackgroundColor(Color.RED)
+                setTextColor(Color.WHITE)
+                setOnClickListener { requestScreenCapture() }
+            }
+            
+            val btnLp = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                y = 150
+            }
+            
+            try {
+                windowManager.addView(verifyButton, btnLp)
+            } catch (e: Exception) {
+                Log.e("BubbleService", "Error al añadir botón verificar", e)
             }
         }
-        serviceScope.launch {
-            settingsManager.bubbleSpeedFlow.collectLatest { speed ->
-                currentBubbleSpeed = speed
-                // Actualizar velocidad manteniendo dirección
-                activeBubbles.forEach { bubble ->
-                    bubble.speedX = if (bubble.speedX > 0) speed else -speed
-                    bubble.speedY = if (bubble.speedY > 0) speed else -speed
-                }
-            }
+    }
+
+    private fun requestScreenCapture() {
+        val intent = Intent(this, ScreenCaptureActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+        startActivity(intent)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Aseguramos que la notificación FGS esté siempre activa con los tipos correctos
+        startForegroundNotification()
+
+        if (intent?.action == "ACTION_START_CAPTURE") {
+            val resultData: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra("RESULT_DATA", Intent::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra("RESULT_DATA")
+            }
+            if (resultData != null) startOcrProcess(resultData)
+            return START_STICKY
+        }
+
         val bubbleText = intent?.getStringExtra("BUBBLE_TEXT") ?: "¡Disciplina!"
         val missionId = intent?.getIntExtra("MISSION_ID", -1) ?: -1
         
-        startForegroundNotification()
-        
-        // Cargar ajustes actuales antes de crear la burbuja
         serviceScope.launch {
             currentBubbleColor = settingsManager.bubbleColorFlow.first()
             currentBubbleSpeed = settingsManager.bubbleSpeedFlow.first()
-            createNewBubble(missionId, bubbleText)
+            
+            val historyId = withContext(Dispatchers.IO) {
+                historyDao.insertHistory(MissionHistory(missionId = missionId, missionMessage = bubbleText, activationTime = System.currentTimeMillis())).toInt()
+            }
+            createNewBubble(missionId, historyId, bubbleText)
             if (!isAnimationRunning) startGlobalAnimationLoop()
         }
-
         return START_STICKY
+    }
+
+    private fun startOcrProcess(resultData: Intent) {
+        val projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        mediaProjection = projectionManager.getMediaProjection(Activity.RESULT_OK, resultData)
+        
+        // REQUISITO ANDROID 14: Registrar callback antes de crear VirtualDisplay
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() {
+                    super.onStop()
+                    Log.d("BubbleService", "MediaProjection detenido")
+                }
+            }, Handler(Looper.getMainLooper()))
+        }
+
+        val metrics = resources.displayMetrics
+        val imageReader = ImageReader.newInstance(metrics.widthPixels, metrics.heightPixels, PixelFormat.RGBA_8888, 2)
+        
+        mediaProjection?.createVirtualDisplay(
+            "ScreenCapture", metrics.widthPixels, metrics.heightPixels, metrics.densityDpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, imageReader.surface, null, null
+        )
+
+        Handler(Looper.getMainLooper()).postDelayed({
+            val image = imageReader.acquireLatestImage()
+            if (image != null) {
+                val planes = image.planes
+                val buffer = planes[0].buffer
+                val pixelStride = planes[0].pixelStride
+                val rowStride = planes[0].rowStride
+                val rowPadding = rowStride - pixelStride * metrics.widthPixels
+
+                val bitmap = Bitmap.createBitmap(metrics.widthPixels + rowPadding / pixelStride, metrics.heightPixels, Bitmap.Config.ARGB_8888)
+                bitmap.copyPixelsFromBuffer(buffer)
+                image.close()
+                imageReader.close()
+                mediaProjection?.stop()
+
+                serviceScope.launch {
+                    val success = ocrManager.verifyPunishmentMessage(bitmap)
+                    if (success) {
+                        Toast.makeText(this@BubbleForegroundService, "¡Verificado! Desbloqueando...", Toast.LENGTH_LONG).show()
+                        stopSelf()
+                    } else {
+                        Toast.makeText(this@BubbleForegroundService, "No veo el mensaje enviado. Envíalo primero.", Toast.LENGTH_LONG).show()
+                    }
+                }
+            } else {
+                Toast.makeText(this, "Error de captura. Inténtalo de nuevo.", Toast.LENGTH_SHORT).show()
+            }
+        }, 500)
     }
 
     private fun startForegroundNotification() {
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("BubbleDiscipline BLOQUEADO")
-            .setContentText("Pulsa 3 veces 'Bajar Volumen' en emergencia")
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle("BubbleDiscipline ACTIVO")
+            .setContentText("Pulsa 3 veces 'Volumen Abajo' para emergencia")
+            .setSmallIcon(R.mipmap.ic_launcher)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            startForeground(
+                NOTIFICATION_ID, 
+                notification, 
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            )
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
     }
 
-    private fun createNewBubble(missionId: Int, text: String) {
+    private fun createNewBubble(missionId: Int, historyId: Int, text: String) {
         if (activeBubbles.any { it.missionId == missionId && missionId != -1 }) return
-
-        val realSize = Point()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val bounds = windowManager.currentWindowMetrics.bounds
-            realSize.x = bounds.width()
-            realSize.y = bounds.height()
-        } else {
-            @Suppress("DEPRECATION")
-            windowManager.defaultDisplay.getRealSize(realSize)
-        }
-
         val metrics = resources.displayMetrics
         val bubbleSize = (120 * metrics.density).toInt()
-        
         val textView = TextView(this).apply {
             this.text = "🫧\n$text"
             id = View.generateViewId()
@@ -235,27 +306,26 @@ class BubbleForegroundService : Service() {
             isClickable = true
         }
 
-        val lp = FrameLayout.LayoutParams(bubbleSize, bubbleSize)
-        textView.layoutParams = lp
-
         val newBubble = BubbleInstance(
-            missionId = missionId,
-            view = textView,
-            posX = (Math.random() * (realSize.x - bubbleSize)).toFloat(),
-            posY = (Math.random() * (realSize.y - bubbleSize)).toFloat(),
+            missionId = missionId, historyId = historyId, view = textView,
+            posX = (Math.random() * (metrics.widthPixels - bubbleSize)).toFloat(),
+            posY = (Math.random() * (metrics.heightPixels - bubbleSize)).toFloat(),
             speedX = (if (Math.random() > 0.5) 1 else -1) * currentBubbleSpeed,
             speedY = (if (Math.random() > 0.5) 1 else -1) * currentBubbleSpeed
         )
 
         textView.setOnClickListener {
-            removeBubbleInstance(newBubble)
+            val lp = blockingContainer.layoutParams as WindowManager.LayoutParams
+            if ((lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) == 0) {
+                removeBubbleInstance(newBubble, true)
+            }
         }
-
-        blockingContainer.addView(textView)
+        blockingContainer.addView(textView, FrameLayout.LayoutParams(bubbleSize, bubbleSize))
         activeBubbles.add(newBubble)
     }
 
-    private fun removeBubbleInstance(bubble: BubbleInstance) {
+    private fun removeBubbleInstance(bubble: BubbleInstance, updateDb: Boolean) {
+        if (updateDb) serviceScope.launch(Dispatchers.IO) { historyDao.markCompleted(bubble.historyId, System.currentTimeMillis(), false) }
         blockingContainer.removeView(bubble.view)
         activeBubbles.remove(bubble)
         if (activeBubbles.isEmpty()) stopSelf()
@@ -264,43 +334,17 @@ class BubbleForegroundService : Service() {
     private fun startGlobalAnimationLoop() {
         if (isAnimationRunning) return
         isAnimationRunning = true
-        
-        val realSize = Point()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val bounds = windowManager.currentWindowMetrics.bounds
-            realSize.x = bounds.width()
-            realSize.y = bounds.height()
-        } else {
-            @Suppress("DEPRECATION")
-            windowManager.defaultDisplay.getRealSize(realSize)
-        }
-
-        val bubbleSize = (120 * resources.displayMetrics.density).toInt()
-
+        val metrics = resources.displayMetrics
+        val bubbleSize = (120 * metrics.density).toInt()
         val runnable = object : Runnable {
             override fun run() {
-                if (activeBubbles.isEmpty()) {
-                    isAnimationRunning = false
-                    return
-                }
-
+                if (activeBubbles.isEmpty()) { isAnimationRunning = false; return }
                 activeBubbles.forEach { bubble ->
-                    bubble.posX += bubble.speedX
-                    bubble.posY += bubble.speedY
-
-                    if (bubble.posX <= 0 || bubble.posX >= (realSize.x - bubbleSize)) {
-                        bubble.speedX *= -1f
-                        bubble.posX = bubble.posX.coerceIn(0f, (realSize.x - bubbleSize).toFloat())
-                    }
-                    if (bubble.posY <= 0 || bubble.posY >= (realSize.y - bubbleSize)) {
-                        bubble.speedY *= -1f
-                        bubble.posY = bubble.posY.coerceIn(0f, (realSize.y - bubbleSize).toFloat())
-                    }
-
-                    bubble.view.x = bubble.posX
-                    bubble.view.y = bubble.posY
+                    bubble.posX += bubble.speedX; bubble.posY += bubble.speedY
+                    if (bubble.posX <= 0 || bubble.posX >= (metrics.widthPixels - bubbleSize)) bubble.speedX *= -1f
+                    if (bubble.posY <= 0 || bubble.posY >= (metrics.heightPixels - bubbleSize)) bubble.speedY *= -1f
+                    bubble.view.x = bubble.posX; bubble.view.y = bubble.posY
                 }
-
                 animationHandler.postDelayed(this, 16)
             }
         }
@@ -311,14 +355,41 @@ class BubbleForegroundService : Service() {
         super.onDestroy()
         serviceScope.cancel()
         animationHandler.removeCallbacksAndMessages(null)
-        try {
-            windowManager.removeView(blockingContainer)
-        } catch (e: Exception) {}
+        if (verifyButton != null) { try { windowManager.removeView(verifyButton) } catch (e: Exception) {} }
+        try { windowManager.removeView(blockingContainer) } catch (e: Exception) {}
         activeBubbles.clear()
         isAnimationRunning = false
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun observeDatabase() {
+        val missionDao = AppDatabase.getDatabase(this).missionDao()
+        serviceScope.launch {
+            missionDao.getAllMissions().collectLatest { missions ->
+                activeBubbles.forEach { bubble ->
+                    val updatedMission = missions.find { it.id == bubble.missionId }
+                    if (updatedMission != null && !updatedMission.isEnabled) removeBubbleInstance(bubble, false)
+                }
+            }
+        }
+    }
+
+    private fun observeSettings() {
+        serviceScope.launch {
+            settingsManager.bubbleColorFlow.collectLatest { colorHex ->
+                currentBubbleColor = colorHex
+                val color = Color.parseColor(colorHex)
+                activeBubbles.forEach { (it.view.background as? GradientDrawable)?.setColor(color) }
+            }
+        }
+        serviceScope.launch {
+            settingsManager.bubbleSpeedFlow.collectLatest { speed ->
+                currentBubbleSpeed = speed
+                activeBubbles.forEach { it.speedX = if (it.speedX > 0) speed else -speed; it.speedY = if (it.speedY > 0) speed else -speed }
+            }
+        }
+    }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
